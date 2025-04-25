@@ -1,0 +1,1846 @@
+CREATE DEFINER=`root`@`%` PROCEDURE `getDhubAnalyticsLevel3`(ReportRunId INT)
+BEGIN	
+    DECLARE FromDate		DATE;
+    DECLARE Duration		INT;
+	DECLARE ExecutiveIds	TEXT; 
+    DECLARE quarterStDt  DATE;
+    DECLARE quarterStDtCol  DATE;
+    DECLARE tmpFrmDt		DATE;
+    DECLARE ToDate			DATE;
+    DECLARE dynQry			TEXT;
+    DECLARE unAssignedDiv		TEXT; 
+	DECLARE updCols					TEXT;
+	DECLARE colspan					INT DEFAULT 0;
+    
+	DECLARE caseQry			TEXT;
+    DECLARE sumQry			TEXT;
+    DECLARE sfSum			TEXT;
+	DECLARE ChkPrevQrtr 	VARCHAR(10) DEFAULT '';
+	DECLARE prevQrtr		TEXT DEFAULT '';
+    DECLARE updSfQrts 		TEXT; 
+    DECLARE ExecutiveIdsCopy		TEXT;
+    DECLARE ExecutiveIdsCopy2		TEXT;
+    DECLARE rStartDt				DATE;
+	DECLARE rEndDt					DATE; 
+    DECLARE backDt					INT;
+	DECLARE resourceId	INT;
+	DECLARE viewByType	VARCHAR(20);
+	DECLARE selCols					TEXT;
+    DECLARE CountryIds		TEXT;
+    DECLARE oppType		VARCHAR(2);
+	DECLARE dynSelCols	TEXT;
+	DECLARE dynCols	TEXT;
+    DECLARE probabilityOpp VARCHAR(20);
+    DECLARE AccountIds TEXT;
+    DECLARE prLocId VARCHAR(100);
+    DECLARE DivisionId VARCHAR(100);
+   DECLARE StatusId VARCHAR(100);
+    DECLARE ActiveStatus VARCHAR(100);
+    DECLARE ClosedwonStatus VARCHAR(100);
+    DECLARE ClosedlostStatus VARCHAR(100);
+    DECLARE amountParticipant DECIMAL(10,2);
+        DECLARE insrtHdr1			LONGTEXT;
+    DECLARE insrtHdr2			LONGTEXT;
+    DECLARE insrtHdr3			LONGTEXT;
+    DECLARE insrtHdr4			LONGTEXT;
+    
+    DECLARE actamtSumQry				TEXT;
+    DECLARE actamtCaseQry				TEXT;
+    DECLARE wonamtSumQry				TEXT;
+    DECLARE wonamtCaseQry				TEXT;
+     DECLARE lostamtSumQry				TEXT;
+    DECLARE lostamtCaseQry				TEXT;
+    DECLARE updOppAmt				TEXT;
+    DECLARE updAssigned				TEXT;
+    DECLARE totalAssignedSum TEXT;
+    DECLARE totalActiveSum TEXT;
+    DECLARE totalWonSum TEXT;
+    DECLARE totalLostSum TEXT;
+	DECLARE contractId VARCHAR(1000);
+	DECLARE AccOwnId   TEXT; 
+	DECLARE updQrts   TEXT;
+	
+	SELECT
+		MAX(FromDateIn),
+		MAX(DurationIn),
+		MAX(ExecutiveIdsIn),
+		MAX(resIdIn),
+		MAX(viewByIn),
+		MAX(CountryIdsIn),
+		MAX(oppTypeIn),
+        MAX(probabilityOppIn),
+        MAX(AccountIdsIn),
+        MAX(prLocIdIn),
+        MAX(divisionIdIn),
+        MAX(statusIdIn),
+        MAX(contractIdIn),
+        MAX(AccOwnIdIn)
+        INTO
+		FromDate,
+		Duration,
+		ExecutiveIds,
+		resourceId,
+		viewByType,
+		CountryIds,
+		oppType,
+        probabilityOpp,
+        AccountIds,
+        prLocId,
+        DivisionId,
+        StatusId,
+        contractId,
+		AccOwnId
+    FROM
+		(
+			 SELECT 
+				CASE WHEN rrf.field = 'from' THEN value END AS FromDateIn,
+				CASE WHEN rrf.field = 'duration' THEN value END AS DurationIn,
+				CASE WHEN rrf.field = 'executives' THEN value END AS ExecutiveIdsIn,
+				CASE WHEN rrf.field = 'resId' THEN value END AS resIdIn,
+				CASE WHEN rrf.field = 'viewBy' THEN value END AS viewByIn,
+				CASE WHEN rrf.field = 'countries' THEN value END AS CountryIdsIn,
+				CASE WHEN rrf.field = 'oppType' THEN value END AS oppTypeIn,
+                CASE WHEN rrf.field = 'probability' THEN value END AS probabilityOppIn,
+                CASE WHEN rrf.field = 'customers' THEN value END AS AccountIdsIn,
+                CASE WHEN rrf.field = 'prLoc' THEN value END AS prLocIdIn,
+                CASE WHEN rrf.field = 'division' THEN value END AS divisionIdIn,
+                CASE WHEN rrf.field = 'statusid' THEN value END AS statusIdIn,
+                CASE WHEN rrf.field = 'contract' THEN value END AS contractIdIn,
+                CASE WHEN rrf.field = 'accown' THEN value END AS AccOwnIdIn
+
+
+			FROM
+				report_runs rr
+			INNER JOIN report_run_filters rrf ON rr.id = rrf.report_run_id
+			WHERE
+				rr.id = ReportRunId
+		 ) AS runs_filters;
+set sql_safe_updates =0; 
+   SET  unAssignedDiv = LOCATE("99",DivisionId); 
+    If(AccOwnId = '-1' OR  LOCATE('999',AccOwnId)) THEN
+     SET @joinCondition = CONCAT(" LEFT JOIN customer_prospects cp ON cp.id = sf.customer_id  ");
+	 SET @cname = CONCAT(" cp.name ");
+    ELSE
+     SET @joinCondition ='';
+     SET @cname =CONCAT("''");
+     END IF;
+       
+     IF(probabilityOpp = '24') THEN
+    SET @prb = CONCAT('AND sf.probability < 25');
+   ELSEIF(probabilityOpp = '25') THEN
+    SET @prb = CONCAT('AND sf.probability between 24 and 89');
+       ELSEIF(probabilityOpp = '50') THEN
+   SET @prb = CONCAT('AND sf.probability between 49 and 89');
+       ELSEIF(probabilityOpp = '75') THEN
+   SET @prb = CONCAT('AND sf.probability between 74 and 89');
+     ELSEIF(probabilityOpp = '100') THEN
+    SET @prb = CONCAT('AND sf.probability=100');
+    ELSE SET @prb = '';
+    END IF;
+    
+          SET tmpFrmDt = FromDate; 
+   SET @ToDate = DATE_ADD(FromDate, INTERVAL (Duration*3)-1 MONTH);
+   
+    SET ActiveStatus=CONCAT(' (FIND_IN_SET(dhd.dhub_status_id, ''1452,1453,1455,1457'') AND sf.probability<>100)');
+    SET ClosedwonStatus=CONCAT(' (FIND_IN_SET(dhd.dhub_status_id, ''1454'') OR sf.probability=100)');
+    SET ClosedlostStatus=CONCAT(' (FIND_IN_SET(dhd.dhub_status_id, ''1454'') OR sf.probability=0)');
+
+IF(StatusId ='-1') THEN    
+ SET @stat='1=1';
+    ELSEIF(StatusId='active') THEN
+   SET @stat = CONCAT(ActiveStatus);
+    ELSEIF(StatusId='closedwon') THEN
+    SET  @stat=CONCAT(ClosedwonStatus);
+    ELSEIF(StatusId='closedlost') THEN
+    SET  @stat=CONCAT(ClosedlostStatus); 
+    ELSEIF(locate('active',StatusId) AND locate('closedwon',StatusId)  ) THEN
+       SET  @stat=CONCAT('(',ActiveStatus,'OR',ClosedwonStatus,')'); 
+    ELSEIF(locate('active',StatusId) AND locate('closedlost',StatusId)  ) THEN
+       SET  @stat=CONCAT('(',ActiveStatus,'OR',ClosedlostStatus,')'); 
+ ELSEIF(locate('closedwon',StatusId) AND locate('closedlost',StatusId)  ) THEN
+       SET  @stat=CONCAT('(',ClosedwonStatus,'OR',ClosedlostStatus,')'); 
+         END IF;
+
+         
+        DROP TEMPORARY TABLE IF EXISTS datas;
+    CREATE TEMPORARY TABLE datas(
+    id INT,
+    name VARCHAR(50),
+    type_id VARCHAR(50),
+    owner_name_copy VARCHAR(50),
+    lvl INT,
+    actual_revenue DECIMAL(10,2) DEFAULT 0
+    );
+    
+     DROP TEMPORARY TABLE IF EXISTS tmp_dates;
+    CREATE TEMPORARY TABLE tmp_dates(
+		quarterStDt  DATE,
+        quarterEndDt 	DATE
+    );
+    
+
+	SET @dynQry = CONCAT("ALTER TABLE datas ");
+   
+    SET @insrtHdr2 = CONCAT(" -2,'Owner^&2^&1','Type^&2^&1','Owner Copy^&2^&1',-2");
+	
+	SET @insrtHdr1 = " -1, NULL, NULL,NULL,-1";
+	
+  
+
+  
+
+  
+
+    SET @dynCols = "";
+    SET @dynColSum = "";
+        
+         SET @actamtSumQry = "";
+         SET @actamtCaseQry = "";
+         SET @wonamtSumQry = "";
+         SET @wonamtCaseQry = "";
+         SET @lostamtSumQry = "";
+         SET @lostamtCaseQry = "";
+         SET @updOppAmt = "";
+         SET @updOppAssigned = "";
+         SET @updOppActive = "";
+         SET @updAssigned = "";
+         
+         set @assignedCountSumQry="";
+         set @assignedCountCaseQry="";
+         
+             set @activeCountSumQry="";
+         set @activeCountCaseQry="";
+         
+          set @activeCountSumQrySummary="";
+         set @activeCountCaseQrySummary="";
+         
+    SET @totalAssignedSum = " total_assigned = ";
+    SET @totalActiveSum = " total_active = ";
+    SET @totalWonSum = " total_won = ";
+    SET @totalLostSum = " total_lost = ";
+         
+
+         
+    SET @selCols = "";
+SET @dynSelCols = "id,name,type_id,owner_name_copy,lvl,actual_revenue,";
+	
+	
+
+    SET @updQrts = ' update datas t SET  ';
+    
+    SET @dropCols = '';
+    IF(StatusId='-1') THEN
+    SET StatusId=concat('active','won','lost');
+    END IF;
+     IF(LOCATE('active',StatusId)) THEN
+		SET colspan = colspan+1;
+				END IF;
+                  IF(LOCATE('closedwon',StatusId)) THEN
+		SET colspan = colspan+1;
+				END IF;
+                  IF(LOCATE('closedlost',StatusId)) THEN
+		SET colspan = colspan+1;
+				END IF;
+                
+                
+	WHILE tmpFrmDt <= @ToDate DO
+     
+		SET @colName = REPLACE(tmpFrmDt, "-", "_");
+	
+
+		IF(prevQrtr ='') THEN
+			SET  ChkPrevQrtr = ''; 
+		ELSE 
+			SET ChkPrevQrtr = ', '; 
+		END IF;
+		SET @QuarterCol = REPLACE(GetFYQuarter(tmpFrmDt,'%Y'), "-", "_"); 
+        IF prevQrtr <> GetFYQuarter(tmpFrmDt,'%Y') THEN
+        INSERT INTO tmp_dates(quarterStDt,quarterEndDt)
+        select GetFYQuarterFirstDate(tmpFrmDt),GetFYQuarterLastDate(tmpFrmDt);
+        DROP TEMPORARY TABLE if exists tmp_dates2;
+        create temporary table tmp_dates2
+		select * from tmp_dates;
+		  SET @quarterStDt=GetFYQuarterFirstDate(tmpFrmDt);
+		 	SET @quarterStDtCol = REPLACE(@quarterStDt, "-", "_");	
+            
+            
+            
+			SET @dynQry = CONCAT(@dynQry," ADD COLUMN `",@quarterStDtCol,"_assigned` VARCHAR(152) DEFAULT 0,ADD COLUMN `",@quarterStDtCol,"_won` VARCHAR(152) DEFAULT 0,ADD COLUMN `",@quarterStDtCol,"_lost` VARCHAR(152) DEFAULT 0,ADD COLUMN `",@quarterStDtCol,"_active` VARCHAR(152) DEFAULT 0,");
+			SET @dynSelCols = CONCAT(@dynSelCols,"",@quarterStDtCol,"_assigned,",@quarterStDtCol,"_won,",@quarterStDtCol,"_lost,",@quarterStDtCol,"_active,");
+			SET @SelCols = CONCAT(@SelCols,"",@quarterStDtCol,"_assigned,",@quarterStDtCol,"_won,",@quarterStDtCol,"_lost,",@quarterStDtCol,"_active,");
+			
+			SET @insrtHdr2 = CONCAT(@insrtHdr2,",'",@QuarterCol,"^&1^&",colspan,"^&Quart^&",@QuarterCol,"',NULL,NULL,NULL");
+			SET @insrtHdr1 = CONCAT(@insrtHdr1,",'Assigned^&2^&1 ','Won^&2^&1 ','Lost^&2^&1','Active^&2^&1 '");
+			
+			
+			SET @dynColSum = CONCAT(@dynColSum,", IFNULL(SUM(`", @quarterStDtCol, "_assigned`),0), IFNULL(SUM(`", @quarterStDtCol, "_won`),0), IFNULL(SUM(`", @quarterStDtCol, "_lost`),0), IFNULL(SUM(`", @quarterStDtCol, "_active`),0)");
+			SET @dynCols = CONCAT(@dynCols,", `", @quarterStDtCol, "_assigned`, `", @quarterStDtCol, "_won`, `", @quarterStDtCol, "_lost`, `", @quarterStDtCol, "_active`");
+	SET @actamtCaseQry = CONCAT(@actamtCaseQry, ", CASE 
+    WHEN prb.allocation_type_id IN (187,808) THEN t.entered_hours * ROUND(
+        IF(prb.id IS NULL, d.orgRev, ROUND(prb.hourly_rate * IF(p.source = 'Projector', 1, c.value_in_usd), 2)), 2)
+    ELSE 0 
+END AS actual_revenue");
+	SET @actamtSumQry = CONCAT(@actamtSumQry,",ROUND(IFNULL(SUM(`", @quarterStDtCol,"_active`),0)) AS `", @quarterStDtCol,"_active`");
+		SET @wonamtCaseQry = CONCAT(@wonamtCaseQry,",CASE WHEN QuarterCol = '", @quarterStDt, "' THEN won ELSE 0 END AS `", @quarterStDtCol,"_won`");
+	SET @wonamtSumQry = CONCAT(@wonamtSumQry,",ROUND(IFNULL(SUM(`", @quarterStDtCol,"_won`),0)) AS `", @quarterStDtCol,"_won`");
+      SET @lostamtCaseQry = CONCAT(@lostamtCaseQry,",CASE WHEN QuarterCol = '", @quarterStDt, "' THEN lost ELSE 0 END AS `", @quarterStDtCol,"_lost`");
+	SET @lostamtSumQry = CONCAT(@lostamtSumQry,",ROUND(IFNULL(SUM(`", @quarterStDtCol,"_lost`),0)) AS `", @quarterStDtCol,"_lost`");
+       SET @updOppAmt = CONCAT(@updOppAmt ," t.", @quarterStDtCol, "_active = upd.", @quarterStDtCol, "_active,t.", @quarterStDtCol, "_won = upd.", @quarterStDtCol, "_won,t.", @quarterStDtCol, "_lost = upd.", @quarterStDtCol, "_lost, "); 
+       
+        SET @updOppAssigned = CONCAT(@updOppAssigned, " t.", @quarterStDtCol, "_assigned = upd.", @quarterStDtCol, "_assigned, ");
+        SET @updOppActive = CONCAT(@updOppActive, " t.", @quarterStDtCol, "_active = upd.", @quarterStDtCol, "_active, ");
+      SET @updAssigned = CONCAT(@updAssigned ," t.", @quarterStDtCol, "_assigned = (upd.", @quarterStDtCol, "_active + upd.", @quarterStDtCol, "_won + upd.", @quarterStDtCol, "_lost), "); 
+		
+		SET @totalAssignedSum = CONCAT(@totalAssignedSum," ROUND(IFNULL(t.`", @quarterStDtCol, "_assigned`,0))+ "); 
+		SET @totalActiveSum = CONCAT(@totalActiveSum," ROUND(IFNULL(t.`", @quarterStDtCol, "_active`,0))+ "); 
+		SET @totalWonSum = CONCAT(@totalWonSum," ROUND(IFNULL(t.`", @quarterStDtCol, "_won`,0))+ "); 
+		SET @totalLostSum = CONCAT(@totalLostSum," ROUND(IFNULL(t.`", @quarterStDtCol, "_lost`,0))+ "); 
+
+	SET @assignedCountCaseQry = CONCAT(@assignedCountCaseQry,",CASE WHEN QuarterCol = '", @quarterStDt, "' THEN assigned ELSE 0 END AS `", @quarterStDtCol,"_assigned`");
+	SET @assignedCountSumQry = CONCAT(@assignedCountSumQry,",ROUND(IFNULL(SUM(`", @quarterStDtCol,"_assigned`),0)) AS `", @quarterStDtCol,"_assigned`");
+
+SET @activeCountCaseQry = CONCAT(@activeCountCaseQry,",CASE WHEN QuarterCol = '", @quarterStDt, "' THEN active ELSE 0 END AS `", @quarterStDtCol,"_active`");
+	SET @activeCountSumQry = CONCAT(@activeCountSumQry,",ROUND(IFNULL(SUM(`", @quarterStDtCol,"_active`),0)) AS `", @quarterStDtCol,"_active`");
+
+SET @activeCountCaseQrySummary = CONCAT(@activeCountCaseQrySummary,",CASE WHEN QuarterCol = '", @quarterStDt, "' THEN active ELSE 0 END AS `", @quarterStDtCol,"_active`");
+	SET @activeCountSumQrySummary = CONCAT(@activeCountSumQrySummary,",ROUND(IFNULL((`", @quarterStDtCol,"_active`),0)) AS `", @quarterStDtCol,"_active`");
+ 	
+	
+       
+	  IF(!LOCATE('active',StatusId)) THEN
+					SET @dropCols = CONCAT(@dropCols, " DROP COLUMN `", @quarterStDtCol, "_active`, ");
+					SET @selCols = REPLACE(@selCols, CONCAT(",",@quarterStDtCol,"_active"),'');
+				END IF;
+		IF(!LOCATE('closedwon',StatusId)) THEN
+					SET @dropCols = CONCAT(@dropCols, " DROP COLUMN `", @quarterStDtCol, "_won`, ");
+					SET @selCols = REPLACE(@selCols, CONCAT(",",@quarterStDtCol,"_won"),'');
+				END IF;
+		IF(!LOCATE('closedlost',StatusId)) THEN
+					SET @dropCols = CONCAT(@dropCols, " DROP COLUMN `", @quarterStDtCol, "_lost`, ");
+					SET @selCols = REPLACE(@selCols, CONCAT(",",@quarterStDtCol,"_lost"),'');
+				END IF;
+		
+		END IF;
+		
+       
+        SET prevQrtr = GetFYQuarter(tmpFrmDt,'%Y');
+		SET tmpFrmDt = DATE_ADD(tmpFrmDt, INTERVAL 1 MONTH);
+        
+    END WHILE;
+
+   SET @dynQry = CONCAT(@dynQry," ADD COLUMN total_assigned VARCHAR(152) DEFAULT 0,ADD COLUMN total_won VARCHAR(152) DEFAULT 0,ADD COLUMN total_lost VARCHAR(152) DEFAULT 0,ADD COLUMN total_active VARCHAR(152) DEFAULT 0");
+	SET @dynSelCols = CONCAT(@dynSelCols,"total_assigned,total_won,total_lost,total_active");
+	SET @SelCols = CONCAT(@SelCols,"total_assigned,total_won,total_lost,total_active");
+  SET @dynColSum = CONCAT(@dynColSum, ", IFNULL(SUM(`actual_revenue`),0) AS `total_actual_revenue`");
+    SET @insrtHdr2 = CONCAT(@insrtHdr2,",'Total^&1^&",colspan,"^&Total' ,NULL,NULL,NULL");
+   
+    SET @insrtHdr1 = CONCAT(@insrtHdr1,", 'Assigned','Won','Lost','Active'");
+    SET @dynCols = CONCAT(@dynCols,", `total_assigned`, `total_won`, `total_lost`, `total_active`");
+    SET @dynColSum = CONCAT(@dynColSum,", IFNULL(SUM(`total_assigned`),0) AS `total_assigned`, IFNULL(SUM(`total_won`),0) AS `total_won`, IFNULL(SUM(`total_lost`),0) AS `total_lost`, IFNULL(SUM(`total_active`),0) AS `total_active`");
+  
+    IF(!LOCATE('closedwon',StatusId)) THEN
+			SET @dropCols = CONCAT(@dropCols, " DROP COLUMN total_won, ");
+			SET @selCols = REPLACE(@selCols, ",total_won",'');
+		END IF;
+        IF(!LOCATE('closedlost',StatusId)) THEN
+			SET @dropCols = CONCAT(@dropCols, " DROP COLUMN total_lost, ");
+			SET @selCols = REPLACE(@selCols, ",total_lost",'');
+		END IF;
+        IF(!LOCATE('active',StatusId)) THEN
+			SET @dropCols = CONCAT(@dropCols, " DROP COLUMN total_active, ");
+			SET @selCols = REPLACE(@selCols, ",total_active",'');
+		END IF;
+SET @updOppAmt = CASE WHEN SUBSTRING(@updOppAmt, -2) = ', ' THEN SUBSTRING(@updOppAmt, 1, CHAR_LENGTH(@updOppAmt)-2) ELSE @updOppAmt END;
+SET @updOppAssigned = CASE WHEN SUBSTRING(@updOppAssigned, -2) = ', ' THEN SUBSTRING(@updOppAssigned, 1, CHAR_LENGTH(@updOppAssigned)-2) ELSE @updOppAssigned END;
+SET @updOppActive = CASE WHEN SUBSTRING(@updOppActive, -2) = ', ' THEN SUBSTRING(@updOppActive, 1, CHAR_LENGTH(@updOppActive)-2) ELSE @updOppActive END;
+SET @updAssigned = CASE WHEN SUBSTRING(@updAssigned, -2) = ', ' THEN SUBSTRING(@updAssigned, 1, CHAR_LENGTH(@updAssigned)-2) ELSE @updAssigned END;
+
+  SET @totalAssignedSum = CASE WHEN SUBSTRING(@totalAssignedSum, -2) = '+ ' THEN SUBSTRING(@totalAssignedSum, 1, CHAR_LENGTH(@totalAssignedSum)-2) ELSE @totalAssignedSum END;
+  SET @totalActiveSum = CASE WHEN SUBSTRING(@totalActiveSum, -2) = '+ ' THEN SUBSTRING(@totalActiveSum, 1, CHAR_LENGTH(@totalActiveSum)-2) ELSE @totalActiveSum END;
+  SET @totalWonSum = CASE WHEN SUBSTRING(@totalWonSum, -2) = '+ ' THEN SUBSTRING(@totalWonSum, 1, CHAR_LENGTH(@totalWonSum)-2) ELSE @totalWonSum END;
+  SET @totalLostSum = CASE WHEN SUBSTRING(@totalLostSum, -2) = '+ ' THEN SUBSTRING(@totalLostSum, 1, CHAR_LENGTH(@totalLostSum)-2) ELSE @totalLostSum END;
+   SET @dropCols = CASE WHEN SUBSTRING(@dropCols, -2) = ', ' THEN SUBSTRING(@dropCols, 1, CHAR_LENGTH(@dropCols)-2) ELSE @dropCols END;		
+
+	
+	
+    PREPARE addCols FROM @dynQry;
+    EXECUTE addCols;
+
+    SET @dynQry = CONCAT("INSERT INTO datas VALUES(",@insrtHdr1,"), (",@insrtHdr2,")");
+ 
+    PREPARE addHdrs	FROM @dynQry;
+    EXECUTE addHdrs;
+    
+SET @dynQry = CONCAT("INSERT INTO datas(id, name, type_id, owner_name_copy, lvl, actual_revenue)
+    SELECT owner_id AS id,
+           CONCAT(u.first_name, ' ', u.last_name) AS name,
+           '' AS type_id,
+           CONCAT(u.first_name, ' ', u.last_name) AS owner_name_copy,
+           1 AS lvl,
+           CASE 
+               WHEN prb.allocation_type_id IN (187,808) THEN t.entered_hours * ROUND(
+                   IF(prb.id IS NULL, d.orgRev, ROUND(prb.hourly_rate * IF(p.source = 'Projector', 1, c.value_in_usd), 2)), 2)
+               ELSE 0 
+           END AS actual_revenue
+    FROM dhub_particpants dp
+    JOIN dhub_details dh ON dp.dhub_id = dh.id
+    JOIN salesforce_opportunities sf ON dh.opportunity_id = sf.salesforce_opp_id
+    JOIN resources r ON dp.owner_id = r.id
+    JOIN users u ON r.user_id = u.id
+    LEFT JOIN customers cust ON cust.id = sf.customer_id
+    ", @joinCondition, "
+    WHERE dp.role_id = 1447 
+      AND dp.is_active = 1 
+      AND dh.is_active = 1
+      AND CASE WHEN '", CountryIds, "' != '-1' THEN sf.country_id IN (", CountryIds, ") ELSE 1=1 END ", @prb, "
+      AND CASE WHEN '", AccountIds, "' <> '-1' THEN FIND_IN_SET(sf.account_id, '", AccountIds, "') ELSE 1=1 END
+      AND CASE WHEN (", unAssignedDiv, " > 0 AND '", DivisionId, "' != -1) THEN 
+                   (FIND_IN_SET(r.sf_owner_divisin_id, '", DivisionId, "') OR (r.sf_owner_divisin_id IS NULL OR r.sf_owner_divisin_id = 0)) 
+               WHEN (", unAssignedDiv, " = 0 AND '", DivisionId, "' != -1) THEN 
+                   FIND_IN_SET(r.sf_owner_divisin_id, '", DivisionId, "')  
+               ELSE 1=1 END
+      AND CASE WHEN ('", contractId, "' != '-1' AND !LOCATE('999', '", contractId, "')) THEN 
+                   FIND_IN_SET(sf.service_type, TRIM('", contractId, "')) 
+               WHEN '", contractId, "' != '-1' AND LOCATE('999', '", contractId, "') THEN  
+                   (FIND_IN_SET(sf.service_type, TRIM('", contractId, "')) OR sf.service_type IS NULL) 
+               ELSE 1=1 END
+      AND CASE WHEN ('", AccOwnId, "' != '-1' AND !LOCATE('999', '", AccOwnId, "')) THEN 
+                   FIND_IN_SET(cust.account_owner_id, TRIM('", AccOwnId, "')) 
+               WHEN '", AccOwnId, "' != '-1' AND LOCATE('999', '", AccOwnId, "') THEN  
+                   (FIND_IN_SET(cust.account_owner_id, TRIM('", AccOwnId, "')) OR cust.account_owner_id IS NULL) 
+               ELSE 1=1 END
+    GROUP BY owner_id");
+PREPARE STMT FROM @dynQry;
+		EXECUTE STMT;  
+        
+SET @dynQry = CONCAT("INSERT INTO datas(id,name,type_id,owner_name_copy,lvl)
+select r.id as id, l.lkup_name as name , l.id as type_id, concat(u.first_name,' ',u.last_name)as owner_name_copy,
+2 as lvl from dhub_details d 
+join dhub_particpants dp on d.id=dp.dhub_id  and dp.is_active=1 and dp.role_id=1447 and d.is_active=1
+join resources r on dp.owner_id=r.id
+join salesforce_opportunities sf ON d.opportunity_id=sf.salesforce_opp_id
+LEFT JOIN customers cust ON cust.id = sf.customer_id
+",@joinCondition,"
+join users u on r.user_id=u.id
+join lkup_types l on l.lkup_type_group_id IN (218)
+AND CASE WHEN '",CountryIds,"' != '-1' THEN  sf.country_id IN (",CountryIds,") ELSE 1=1 END ",@prb," 
+AND CASE WHEN '",AccountIds,"' <> '-1'  THEN FIND_IN_SET(sf.account_id,'",AccountIds,"')  ELSE 1=1 END 
+AND CASE WHEN (",unAssignedDiv," > 0 AND '",DivisionId,"'  != -1) THEN (FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"') OR (r.sf_owner_divisin_id IS NULL OR r.sf_owner_divisin_id = 0)) 
+WHEN  (",unAssignedDiv," = 0 AND '",DivisionId,"'  != -1) THEN    FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"')  ELSE 1=1 END
+ AND CASE WHEN('",contractId,"' != '-1' AND !LOCATE('999','",contractId,"')) THEN FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) 
+WHEN '",contractId,"' != '-1' AND LOCATE('999','",contractId,"') THEN  (FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) OR sf.service_type IS NULL) ELSE 1=1 END
+AND CASE WHEN('",AccOwnId,"' != '-1' AND !LOCATE('999','",AccOwnId,"')) THEN FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) 
+WHEN '",AccOwnId,"' != '-1' AND LOCATE('999','",AccOwnId,"') THEN  (FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) OR cust.account_owner_id IS NULL) ELSE 1=1 END
+group by r.id,l.id ");
+PREPARE STMT FROM @dynQry;
+		EXECUTE STMT; 
+DROP TEMPORARY TABLE IF EXISTS tmp_dates_copy;
+CREATE TEMPORARY TABLE tmp_dates_copy
+select t1.quarterStDt, t2.quarterEndDt from tmp_dates t1 join tmp_dates2 t2 ;
+
+    
+        DROP TEMPORARY TABLE IF EXISTS AssignedOpportunityCount;
+      
+         SET @dynQry = CONCAT("CREATE TEMPORARY TABLE AssignedOpportunityCount
+                    SELECT Distinct
+                    dp.owner_id as owner_id,
+                    1466 as type_id,
+				  CONCAT(u.first_name, ' ', u.last_name) AS owner_name,
+				   dh.opportunity_id as salesforce_opp_id,
+				  COUNT(*) as assigned,
+				  2 ,QUARTER_FIRST_DAY(dh.created_by_date) as QuarterCol
+                  FROM dhub_details dh 
+				 JOIN dhub_particpants dp ON dh.id = dp.dhub_id   and dp.is_active=1
+                 JOIN salesforce_opportunities sf ON sf.salesforce_opp_id = dh.opportunity_id and dh.is_active=1
+				 LEFT JOIN customers cust ON cust.id = sf.customer_id
+                 JOIN resources r ON dp.owner_id = r.id
+				 JOIN users u ON r.user_id = u.id
+                 where dp.is_active = 1 AND dp.role_id = 1447 and dh.is_active=1
+                 AND CASE WHEN '",CountryIds,"' != '-1' THEN  sf.country_id IN (",CountryIds,") ELSE 1=1 END ",@prb," 
+                 AND CASE WHEN '",AccountIds,"' <> '-1'  THEN FIND_IN_SET(sf.account_id,'",AccountIds,"')  ELSE 1=1 END 
+              AND CASE WHEN (",unAssignedDiv," > 0 AND '",DivisionId,"'  != -1) THEN (FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"') OR (r.sf_owner_divisin_id IS NULL OR r.sf_owner_divisin_id = 0)) 
+             WHEN  (",unAssignedDiv," = 0 AND '",DivisionId,"'  != -1) THEN    FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"')  ELSE 1=1 END
+            AND CASE WHEN('",contractId,"' != '-1' AND !LOCATE('999','",contractId,"')) THEN FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) 
+             WHEN '",contractId,"' != '-1' AND LOCATE('999','",contractId,"') THEN  (FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) OR sf.service_type IS NULL) ELSE 1=1 END
+           AND CASE WHEN('",AccOwnId,"' != '-1' AND !LOCATE('999','",AccOwnId,"')) THEN FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) 
+            WHEN '",AccOwnId,"' != '-1' AND LOCATE('999','",AccOwnId,"') THEN  (FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) OR cust.account_owner_id IS NULL) ELSE 1=1 END
+           	AND dh.created_by_date BETWEEN '",FromDate,"' AND '",LAST_DAY(@ToDate),"'
+              GROUP BY salesforce_opp_id"); 
+       
+               PREPARE STMT FROM @dynQry;
+		         EXECUTE STMT; 
+                 
+DROP TEMPORARY TABLE IF EXISTS AssignedAmount;
+SET @dynQry = CONCAT("CREATE TEMPORARY TABLE AssignedAmount
+
+ SELECT 
+    dp.owner_id,
+    CONCAT(u.first_name, ' ', u.last_name) as owner_name,
+    sf.salesforce_opp_id,
+    1467 as type_id,
+    sf.amount,
+    SUM(sf.amount) as assigned,
+    2 as lvl,QUARTER_FIRST_DAY(dh.created_by_date) as QuarterCol
+FROM 
+    salesforce_opportunities sf
+JOIN 
+    dhub_details dh ON sf.salesforce_opp_id = dh.opportunity_id and dh.is_active=1
+JOIN 
+    dhub_particpants dp ON dh.id = dp.dhub_id and dp.is_active=1
+LEFT JOIN 
+    resources r ON dp.owner_id = r.id
+LEFT JOIN 
+    users u ON r.user_id = u.id
+    LEFT JOIN customers cust ON cust.id = sf.customer_id
+",@joinCondition,"
+WHERE 
+    dp.role_id IN (1447 ) 
+	AND dh.created_by_date BETWEEN '",FromDate,"' AND '",LAST_DAY(@ToDate),"'
+AND CASE WHEN '",CountryIds,"' != '-1' THEN  sf.country_id IN (",CountryIds,") ELSE 1=1 END ",@prb," 
+AND CASE WHEN '",AccountIds,"' <> '-1'  THEN FIND_IN_SET(sf.account_id,'",AccountIds,"')  ELSE 1=1 END 
+AND CASE WHEN (",unAssignedDiv," > 0 AND '",DivisionId,"'  != -1) THEN (FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"') OR (r.sf_owner_divisin_id IS NULL OR r.sf_owner_divisin_id = 0)) 
+WHEN  (",unAssignedDiv," = 0 AND '",DivisionId,"'  != -1) THEN    FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"')  ELSE 1=1 END
+ AND CASE WHEN('",contractId,"' != '-1' AND !LOCATE('999','",contractId,"')) THEN FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) 
+WHEN '",contractId,"' != '-1' AND LOCATE('999','",contractId,"') THEN  (FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) OR sf.service_type IS NULL) ELSE 1=1 END
+  AND CASE WHEN('",AccOwnId,"' != '-1' AND !LOCATE('999','",AccOwnId,"')) THEN FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) 
+WHEN '",AccOwnId,"' != '-1' AND LOCATE('999','",AccOwnId,"') THEN  (FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) OR cust.account_owner_id IS NULL) ELSE 1=1 END
+ GROUP BY 
+    sf.salesforce_opp_id, dp.owner_id, dp.id");
+
+    PREPARE STMT FROM @dynQry;
+		EXECUTE STMT; 
+   
+    
+    	
+
+ DROP TEMPORARY TABLE IF exists ActiveopportunityCount;
+        SET @dynQry = CONCAT(" CREATE TEMPORARY TABLE ActiveopportunityCount
+         
+					SELECT Distinct
+                    dp.owner_id as owner_id,
+                    1466 as type_id,
+				  CONCAT(u.first_name, ' ', u.last_name) AS owner_name,
+				   dh.opportunity_id as salesforce_opp_id,
+				  COUNT(CASE WHEN dh.dhub_status_id IN(1452,1453,1455,1457) AND (dp.signed_off = 0 or dp.signed_off = 1) and sf.probability <>100 and sf.probability <>0 THEN 1 END) AS active,
+				  COUNT(CASE WHEN sf.probability = 100 AND dh.dhub_status_id=1455 THEN 1 END) AS won,
+				  COUNT(CASE WHEN sf.probability = 0  THEN 1 END) AS lost,
+				  2 as lvl,case when dh.created_by_date <= tc.quarterEndDt then QUARTER_FIRST_DAY(tc.quarterEndDt) end as QuarterCol
+                  FROM dhub_details dh 
+				 JOIN dhub_particpants dp ON dh.id = dp.dhub_id   and dp.is_active=1
+                 JOIN salesforce_opportunities sf ON sf.salesforce_opp_id = dh.opportunity_id and dh.is_active=1
+				LEFT JOIN customers cust ON cust.id = sf.customer_id
+                ",@joinCondition,"
+                JOIN resources r ON dp.owner_id = r.id
+				 JOIN users u ON r.user_id = u.id
+                 left join tmp_dates_copy tc on QUARTER_FIRST_DAY(dh.created_by_date)= tc.quarterStDt
+                 where dp.is_active = 1 AND dp.role_id = 1447 and dh.is_active=1
+AND CASE WHEN '",CountryIds,"' != '-1' THEN  sf.country_id IN (",CountryIds,") ELSE 1=1 END ",@prb," 
+AND CASE WHEN '",AccountIds,"' <> '-1'  THEN FIND_IN_SET(sf.account_id,'",AccountIds,"')  ELSE 1=1 END 
+AND CASE WHEN (",unAssignedDiv," > 0 AND '",DivisionId,"'  != -1) THEN (FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"') OR (r.sf_owner_divisin_id IS NULL OR r.sf_owner_divisin_id = 0)) 
+WHEN  (",unAssignedDiv," = 0 AND '",DivisionId,"'  != -1) THEN    FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"')  ELSE 1=1 END
+ AND CASE WHEN('",contractId,"' != '-1' AND !LOCATE('999','",contractId,"')) THEN FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) 
+WHEN '",contractId,"' != '-1' AND LOCATE('999','",contractId,"') THEN  (FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) OR sf.service_type IS NULL) ELSE 1=1 END
+   AND CASE WHEN('",AccOwnId,"' != '-1' AND !LOCATE('999','",AccOwnId,"')) THEN FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) 
+WHEN '",AccOwnId,"' != '-1' AND LOCATE('999','",AccOwnId,"') THEN  (FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) OR cust.account_owner_id IS NULL) ELSE 1=1 END
+				 GROUP BY salesforce_opp_id,tc.quarterStDt,tc.quarterEndDt"); 
+                 PREPARE STMT FROM @dynQry;
+		EXECUTE STMT;
+ DROP TEMPORARY TABLE IF EXISTS ActiveopportunityAmount;
+SET @dynQry = CONCAT("CREATE TEMPORARY TABLE ActiveopportunityAmount
+ SELECT 
+    dp.owner_id,
+    CONCAT(u.first_name, ' ', u.last_name) as owner_name,
+    sf.salesforce_opp_id,
+    1467 as type_id,
+    sf.amount,
+    SUM(CASE WHEN dh.dhub_status_id IN(1452,1453,1455,1457) AND (dp.signed_off = 0 OR dp.signed_off = 1) and sf.probability <>100 and sf.probability <>0 THEN sf.amount ELSE 0 END) as active,
+    SUM(CASE WHEN dh.dhub_status_id = 1455 AND sf.probability = 100 THEN sf.amount ELSE 0 END) as won,
+    SUM(CASE WHEN sf.probability = 0  THEN sf.amount ELSE 0 END) as lost,
+    2 as lvl,case when dh.created_by_date <= tc.quarterEndDt then QUARTER_FIRST_DAY(tc.quarterEndDt) end as QuarterCol
+FROM 
+    salesforce_opportunities sf
+JOIN 
+    dhub_details dh ON sf.salesforce_opp_id = dh.opportunity_id and dh.is_active=1
+JOIN 
+    dhub_particpants dp ON dh.id = dp.dhub_id and dp.is_active=1
+    LEFT JOIN customers cust ON cust.id = sf.customer_id
+",@joinCondition,"
+LEFT JOIN 
+    resources r ON dp.owner_id = r.id
+LEFT JOIN 
+    users u ON r.user_id = u.id
+left join tmp_dates_copy tc on QUARTER_FIRST_DAY(dh.created_by_date)= tc.quarterStDt
+WHERE 
+    dp.role_id IN (1447 )
+	AND dh.created_by_date BETWEEN '",FromDate,"' AND '",LAST_DAY(@ToDate),"'
+AND CASE WHEN '",CountryIds,"' != '-1' THEN  sf.country_id IN (",CountryIds,") ELSE 1=1 END ",@prb," 
+AND CASE WHEN '",AccountIds,"' <> '-1'  THEN FIND_IN_SET(sf.account_id,'",AccountIds,"')  ELSE 1=1 END 
+AND CASE WHEN (",unAssignedDiv," > 0 AND '",DivisionId,"'  != -1) THEN (FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"') OR (r.sf_owner_divisin_id IS NULL OR r.sf_owner_divisin_id = 0)) 
+WHEN  (",unAssignedDiv," = 0 AND '",DivisionId,"'  != -1) THEN    FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"')  ELSE 1=1 END
+ AND CASE WHEN('",contractId,"' != '-1' AND !LOCATE('999','",contractId,"')) THEN FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) 
+WHEN '",contractId,"' != '-1' AND LOCATE('999','",contractId,"') THEN  (FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) OR sf.service_type IS NULL) ELSE 1=1 END
+   AND CASE WHEN('",AccOwnId,"' != '-1' AND !LOCATE('999','",AccOwnId,"')) THEN FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) 
+WHEN '",AccOwnId,"' != '-1' AND LOCATE('999','",AccOwnId,"') THEN  (FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) OR cust.account_owner_id IS NULL) ELSE 1=1 END
+GROUP BY 
+    sf.salesforce_opp_id, dp.owner_id, dp.id,tc.quarterStDt,tc.quarterEndDt");
+PREPARE STMT FROM @dynQry;
+		EXECUTE STMT; 
+        
+ DROP TEMPORARY TABLE IF EXISTS ActiveownerEffortAndActualHrs;
+SET @dynQry = CONCAT("CREATE TEMPORARY TABLE ActiveownerEffortAndActualHrs
+SELECT 
+    dp.owner_id,
+    CONCAT(u.first_name, ' ', u.last_name) as owner_name,
+    sf.salesforce_opp_id,
+    sf.amount,
+    SUM(CASE WHEN dh.dhub_status_id IN(1452,1453,1455,1457) AND (dp.signed_off = 0 OR dp.signed_off = 1) and sf.probability <>100 and sf.probability <>0 THEN dp.effort_hrs ELSE 0 END) as active,
+	SUM(CASE WHEN dh.dhub_status_id IN(1452,1453,1455,1457) AND (dp.signed_off = 0 OR dp.signed_off = 1) and sf.probability <>100 and sf.probability <>0 THEN dp.actual_hrs ELSE 0 END) as active_actual_hrs,
+    dh.id as dhub_id,
+    dp.role_id,
+    2 as lvl
+FROM 
+    salesforce_opportunities sf
+JOIN 
+    dhub_details dh ON sf.salesforce_opp_id = dh.opportunity_id and dh.is_active=1
+JOIN 
+    dhub_particpants dp ON dh.id = dp.dhub_id and dp.is_active=1
+    LEFT JOIN customers cust ON cust.id = sf.customer_id
+",@joinCondition,"
+LEFT JOIN 
+    resources r ON dp.owner_id = r.id
+LEFT JOIN 
+    users u ON r.user_id = u.id
+WHERE 
+    dp.role_id IN (1447)
+AND CASE WHEN '",CountryIds,"' != '-1' THEN  sf.country_id IN (",CountryIds,") ELSE 1=1 END ",@prb," 
+AND CASE WHEN '",AccountIds,"' <> '-1'  THEN FIND_IN_SET(sf.account_id,'",AccountIds,"')  ELSE 1=1 END 
+AND CASE WHEN (",unAssignedDiv," > 0 AND '",DivisionId,"'  != -1) THEN (FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"') OR (r.sf_owner_divisin_id IS NULL OR r.sf_owner_divisin_id = 0)) 
+WHEN  (",unAssignedDiv," = 0 AND '",DivisionId,"'  != -1) THEN    FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"')  ELSE 1=1 END
+ AND CASE WHEN('",contractId,"' != '-1' AND !LOCATE('999','",contractId,"')) THEN FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) 
+WHEN '",contractId,"' != '-1' AND LOCATE('999','",contractId,"') THEN  (FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) OR sf.service_type IS NULL) ELSE 1=1 END
+   AND CASE WHEN('",AccOwnId,"' != '-1' AND !LOCATE('999','",AccOwnId,"')) THEN FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) 
+WHEN '",AccOwnId,"' != '-1' AND LOCATE('999','",AccOwnId,"') THEN  (FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) OR cust.account_owner_id IS NULL) ELSE 1=1 END
+    GROUP BY 
+    sf.salesforce_opp_id, dp.owner_id, dp.id");
+ PREPARE STMT FROM @dynQry;
+		EXECUTE STMT; 
+        
+ DROP TEMPORARY TABLE IF EXISTS ActiveparticipantsEffortAndActualHrs;
+SET @dynQry = CONCAT("CREATE TEMPORARY TABLE ActiveparticipantsEffortAndActualHrs
+SELECT 
+    dp.owner_id,
+    CONCAT(u.first_name, ' ', u.last_name) as owner_name,
+    sf.salesforce_opp_id,
+    sf.amount,
+    SUM(CASE WHEN dh.dhub_status_id IN(1452,1453,1455,1457) AND (dp.signed_off = 0 OR dp.signed_off = 1) and sf.probability <>100 and sf.probability <>0 THEN dp.effort_hrs ELSE 0 END) as active,
+    SUM(CASE WHEN dh.dhub_status_id IN(1452,1453,1455,1457) AND (dp.signed_off = 0 OR dp.signed_off = 1) and sf.probability <>100 and sf.probability <>0 THEN dp.actual_hrs ELSE 0 END) as active_actual_hrs,
+    dh.id as dhub_id,
+    dp.role_id,
+    2 as lvl
+FROM 
+    salesforce_opportunities sf
+JOIN 
+    dhub_details dh ON sf.salesforce_opp_id = dh.opportunity_id and dh.is_active=1
+JOIN 
+    dhub_particpants dp ON dh.id = dp.dhub_id and dp.is_active=1
+    LEFT JOIN customers cust ON cust.id = sf.customer_id
+",@joinCondition,"
+LEFT JOIN 
+    resources r ON dp.owner_id = r.id
+LEFT JOIN 
+    users u ON r.user_id = u.id
+WHERE 
+    dp.role_id IN (1448,1449,1450,1451,1463) 
+AND CASE WHEN '",CountryIds,"' != '-1' THEN  sf.country_id IN (",CountryIds,") ELSE 1=1 END ",@prb," 
+AND CASE WHEN '",AccountIds,"' <> '-1'  THEN FIND_IN_SET(sf.account_id,'",AccountIds,"')  ELSE 1=1 END 
+AND CASE WHEN (",unAssignedDiv," > 0 AND '",DivisionId,"'  != -1) THEN (FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"') OR (r.sf_owner_divisin_id IS NULL OR r.sf_owner_divisin_id = 0)) 
+WHEN  (",unAssignedDiv," = 0 AND '",DivisionId,"'  != -1) THEN    FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"')  ELSE 1=1 END
+ AND CASE WHEN('",contractId,"' != '-1' AND !LOCATE('999','",contractId,"')) THEN FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) 
+WHEN '",contractId,"' != '-1' AND LOCATE('999','",contractId,"') THEN  (FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) OR sf.service_type IS NULL) ELSE 1=1 END
+AND CASE WHEN('",AccOwnId,"' != '-1' AND !LOCATE('999','",AccOwnId,"')) THEN FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) 
+WHEN '",AccOwnId,"' != '-1' AND LOCATE('999','",AccOwnId,"') THEN  (FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) OR cust.account_owner_id IS NULL) ELSE 1=1 END
+GROUP BY 
+    sf.salesforce_opp_id, dp.owner_id, dp.id");
+
+PREPARE STMT FROM @dynQry;
+		EXECUTE STMT; 
+DROP TEMPORARY TABLE IF EXISTS ActivecombinedHrs;
+CREATE TEMPORARY TABLE ActivecombinedHrs
+SELECT
+    dhub_id,
+    salesforce_opp_id,
+    SUM(active) as total_active,
+    SUM(active_actual_hrs) as total_active_actual_hrs
+FROM
+    (
+        SELECT * FROM ActiveownerEffortAndActualHrs
+        UNION ALL
+        SELECT * FROM ActiveparticipantsEffortAndActualHrs
+    ) combined_data
+GROUP BY
+    dhub_id;
+
+ DROP TEMPORARY TABLE IF EXISTS ActivecombinedHrsWithOwner;
+SET @dynQry = CONCAT(" CREATE TEMPORARY TABLE ActivecombinedHrsWithOwner
+ select dp.owner_id,concat(u.first_name,' ',u.last_name) as owner_name_copy,ch.salesforce_opp_id,ch.total_active,ch.total_active_actual_hrs,2 as lvl,ch.dhub_id from ActivecombinedHrs ch
+join dhub_particpants dp on dp.dhub_id = ch.dhub_id and dp.is_active=1
+JOIN  dhub_details dh ON dh.id=dp.dhub_id
+join salesforce_opportunities sf ON sf.salesforce_opp_id = dh.opportunity_id and dh.is_active=1
+join resources r on dp.owner_id = r.id
+LEFT JOIN customers cust ON cust.id = sf.customer_id
+",@joinCondition,"
+join users u on r.user_id = u.id
+where dp.role_id = 1447 
+AND CASE WHEN '",CountryIds,"' != '-1' THEN  sf.country_id IN (",CountryIds,") ELSE 1=1 END ",@prb," 
+AND CASE WHEN '",AccountIds,"' <> '-1'  THEN FIND_IN_SET(sf.account_id,'",AccountIds,"')  ELSE 1=1 END 
+AND CASE WHEN (",unAssignedDiv," > 0 AND '",DivisionId,"'  != -1) THEN (FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"') OR (r.sf_owner_divisin_id IS NULL OR r.sf_owner_divisin_id = 0)) 
+WHEN  (",unAssignedDiv," = 0 AND '",DivisionId,"'  != -1) THEN    FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"')  ELSE 1=1 END
+ AND CASE WHEN('",contractId,"' != '-1' AND !LOCATE('999','",contractId,"')) THEN FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) 
+WHEN '",contractId,"' != '-1' AND LOCATE('999','",contractId,"') THEN  (FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) OR sf.service_type IS NULL) ELSE 1=1 END
+ AND CASE WHEN('",AccOwnId,"' != '-1' AND !LOCATE('999','",AccOwnId,"')) THEN FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) 
+WHEN '",AccOwnId,"' != '-1' AND LOCATE('999','",AccOwnId,"') THEN  (FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) OR cust.account_owner_id IS NULL) ELSE 1=1 END
+  ");  
+PREPARE STMT FROM @dynQry;
+		EXECUTE STMT; 
+ DROP TEMPORARY TABLE IF EXISTS ActiveeffortHrs;
+CREATE TEMPORARY TABLE ActiveeffortHrs
+select co.owner_id,co.owner_name_copy as owner_name,co.salesforce_opp_id,1468 as type_id,co.total_active as active,
+lvl,case when dh.created_by_date <= tc.quarterEndDt then QUARTER_FIRST_DAY(tc.quarterEndDt) end as QuarterCol 
+from ActivecombinedHrsWithOwner co
+JOIN dhub_details dh on co.dhub_id = dh.id
+left join tmp_dates_copy tc on QUARTER_FIRST_DAY(dh.created_by_date)= tc.quarterStDt
+group by tc.quarterStDt,tc.quarterEndDt,co.owner_id,salesforce_opp_id;
+  
+  
+DROP TEMPORARY TABLE IF EXISTS ActiveactualHrs;
+CREATE TEMPORARY TABLE ActiveactualHrs
+SELECT 
+    co.owner_id,
+    co.owner_name_copy AS owner_name,
+    co.salesforce_opp_id,
+    1469 AS type_id,
+    co.total_active_actual_hrs AS active,
+    co.lvl,
+    case when dh.created_by_date <= tc.quarterEndDt then QUARTER_FIRST_DAY(tc.quarterEndDt) end as QuarterCol
+FROM 
+    ActivecombinedHrsWithOwner co
+JOIN 
+    dhub_details dh ON co.dhub_id = dh.id
+LEFT JOIN 
+    tmp_dates_copy tc ON QUARTER_FIRST_DAY(dh.created_by_date) = tc.quarterStDt
+GROUP BY 
+    tc.quarterStDt, tc.quarterEndDt,co.owner_id,salesforce_opp_id;
+    
+  
+  DROP TEMPORARY TABLE IF EXISTS ActiveaverageElapsedTime;
+SET @dynQry = CONCAT("CREATE TEMPORARY TABLE ActiveaverageElapsedTime
+SELECT   CONCAT(u.first_name,' ',u.last_name) as owner_name_copy,
+    sf.salesforce_opp_id,
+    dh.id as dhub_id,
+    sf.close_date,
+    dh.created_by_date,
+	dp.owner_id,
+    DATEDIFF(sf.close_date, dh.created_by_date) as days_difference,
+    CASE WHEN active.active_flag <> 0 THEN DATEDIFF(sf.close_date,dh.created_by_date) END as active,
+    2 as lvl
+FROM 
+    salesforce_opportunities sf
+JOIN 
+    dhub_details dh ON sf.salesforce_opp_id = dh.opportunity_id and dh.is_active=1
+JOIN 
+    dhub_particpants dp ON dh.id = dp.dhub_id   and dp.is_active=1
+    LEFT JOIN customers cust ON cust.id = sf.customer_id
+",@joinCondition,"
+LEFT JOIN 
+    resources r ON dp.owner_id = r.id
+LEFT JOIN 
+    users u ON r.user_id = u.id
+LEFT JOIN (
+    SELECT 
+        sf.salesforce_opp_id,
+        dp.owner_id,
+        SUM(dp.effort_hrs) as total_effort_hours,
+        MAX(CASE WHEN dh.dhub_status_id IN(1452,1453,1455,1457) AND (dp.signed_off = 0 OR dp.signed_off = 1) and sf.probability <>100 and sf.probability <>0 THEN 1 ELSE 0 END) as active_flag
+    FROM 
+        salesforce_opportunities sf
+    JOIN 
+        dhub_details dh ON sf.salesforce_opp_id = dh.opportunity_id  and dh.is_active=1
+    JOIN 
+        dhub_particpants dp ON dh.id = dp.dhub_id  and dp.is_active=1
+        LEFT JOIN customers cust ON cust.id = sf.customer_id
+",@joinCondition,"
+        LEFT JOIN 
+    resources r ON dp.owner_id = r.id
+    WHERE 
+        dp.role_id IN (1447  )
+AND CASE WHEN '",CountryIds,"' != '-1' THEN  sf.country_id IN (",CountryIds,") ELSE 1=1 END ",@prb," 
+AND CASE WHEN '",AccountIds,"' <> '-1'  THEN FIND_IN_SET(sf.account_id,'",AccountIds,"')  ELSE 1=1 END 
+AND CASE WHEN (",unAssignedDiv," > 0 AND '",DivisionId,"'  != -1) THEN (FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"') OR (r.sf_owner_divisin_id IS NULL OR r.sf_owner_divisin_id = 0)) 
+WHEN  (",unAssignedDiv," = 0 AND '",DivisionId,"'  != -1) THEN    FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"')  ELSE 1=1 END
+ AND CASE WHEN('",contractId,"' != '-1' AND !LOCATE('999','",contractId,"')) THEN FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) 
+WHEN '",contractId,"' != '-1' AND LOCATE('999','",contractId,"') THEN  (FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) OR sf.service_type IS NULL) ELSE 1=1 END
+  AND CASE WHEN('",AccOwnId,"' != '-1' AND !LOCATE('999','",AccOwnId,"')) THEN FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) 
+WHEN '",AccOwnId,"' != '-1' AND LOCATE('999','",AccOwnId,"') THEN  (FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) OR cust.account_owner_id IS NULL) ELSE 1=1 END
+    GROUP BY 
+        sf.salesforce_opp_id, dp.owner_id
+) as active ON sf.salesforce_opp_id = active.salesforce_opp_id AND dp.owner_id = active.owner_id
+WHERE 
+    dp.role_id IN (1447  )
+AND CASE WHEN '",CountryIds,"' != '-1' THEN  sf.country_id IN (",CountryIds,") ELSE 1=1 END ",@prb," 
+AND CASE WHEN '",AccountIds,"' <> '-1'  THEN FIND_IN_SET(sf.account_id,'",AccountIds,"')  ELSE 1=1 END 
+AND CASE WHEN (",unAssignedDiv," > 0 AND '",DivisionId,"'  != -1) THEN (FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"') OR (r.sf_owner_divisin_id IS NULL OR r.sf_owner_divisin_id = 0)) 
+WHEN  (",unAssignedDiv," = 0 AND '",DivisionId,"'  != -1) THEN    FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"')  ELSE 1=1 END
+ AND CASE WHEN('",contractId,"' != '-1' AND !LOCATE('999','",contractId,"')) THEN FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) 
+WHEN '",contractId,"' != '-1' AND LOCATE('999','",contractId,"') THEN  (FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) OR sf.service_type IS NULL) ELSE 1=1 END
+  AND CASE WHEN('",AccOwnId,"' != '-1' AND !LOCATE('999','",AccOwnId,"')) THEN FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) 
+WHEN '",AccOwnId,"' != '-1' AND LOCATE('999','",AccOwnId,"') THEN  (FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) OR cust.account_owner_id IS NULL) ELSE 1=1 END
+  ");
+ PREPARE STMT FROM @dynQry;
+		EXECUTE STMT; 
+        
+DROP TEMPORARY TABLE IF EXISTS ActiveaverageDealSize;
+SET @dynQry = CONCAT("CREATE TEMPORARY TABLE 	ActiveaverageDealSize
+SELECT 
+    CONCAT(u.first_name,' ',u.last_name) as owner_name_copy,
+    sf.salesforce_opp_id,
+    sum(sf.amount),
+    dh.id as dhub_id,
+    dp.owner_id,
+	CASE WHEN active.active_flag <> 0 THEN sum(sf.amount / active.active_flag) ELSE 0 END as active,
+    2 as lvl
+FROM 
+    salesforce_opportunities sf
+JOIN 
+    dhub_details dh ON sf.salesforce_opp_id = dh.opportunity_id and dh.is_active=1
+JOIN 
+    dhub_particpants dp ON dh.id = dp.dhub_id  and dp.is_active=1
+    LEFT JOIN customers cust ON cust.id = sf.customer_id
+",@joinCondition,"
+LEFT JOIN 
+    resources r ON dp.owner_id = r.id
+LEFT JOIN 
+    users u ON r.user_id = u.id
+LEFT JOIN (
+    SELECT 
+        sf.salesforce_opp_id,
+        dp.owner_id,
+        MAX(CASE WHEN dh.dhub_status_id IN(1452,1453,1455,1457) AND (dp.signed_off = 0 OR dp.signed_off = 1) and sf.probability <>100 and sf.probability <>0 THEN 1 ELSE 0 END) as active_flag
+    FROM 
+        salesforce_opportunities sf
+    JOIN 
+        dhub_details dh ON sf.salesforce_opp_id = dh.opportunity_id and dh.is_active=1
+        LEFT JOIN customers cust ON cust.id = sf.customer_id
+",@joinCondition,"
+    JOIN 
+        dhub_particpants dp ON dh.id = dp.dhub_id  and dp.is_active=1
+        LEFT JOIN 
+    resources r ON dp.owner_id = r.id
+    WHERE 
+        dp.role_id IN (1447  ) 
+AND CASE WHEN '",CountryIds,"' != '-1' THEN  sf.country_id IN (",CountryIds,") ELSE 1=1 END ",@prb," 
+AND CASE WHEN '",AccountIds,"' <> '-1'  THEN FIND_IN_SET(sf.account_id,'",AccountIds,"')  ELSE 1=1 END 
+AND CASE WHEN (",unAssignedDiv," > 0 AND '",DivisionId,"'  != -1) THEN (FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"') OR (r.sf_owner_divisin_id IS NULL OR r.sf_owner_divisin_id = 0)) 
+WHEN  (",unAssignedDiv," = 0 AND '",DivisionId,"'  != -1) THEN    FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"')  ELSE 1=1 END
+ AND CASE WHEN('",contractId,"' != '-1' AND !LOCATE('999','",contractId,"')) THEN FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) 
+WHEN '",contractId,"' != '-1' AND LOCATE('999','",contractId,"') THEN  (FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) OR sf.service_type IS NULL) ELSE 1=1 END
+  AND CASE WHEN('",AccOwnId,"' != '-1' AND !LOCATE('999','",AccOwnId,"')) THEN FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) 
+WHEN '",AccOwnId,"' != '-1' AND LOCATE('999','",AccOwnId,"') THEN  (FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) OR cust.account_owner_id IS NULL) ELSE 1=1 END
+     GROUP BY sf.salesforce_opp_id, dp.owner_id
+) as active ON sf.salesforce_opp_id = active.salesforce_opp_id AND dp.owner_id = active.owner_id
+
+WHERE 
+    dp.role_id IN (1447  ) 
+AND CASE WHEN '",CountryIds,"' != '-1' THEN  sf.country_id IN (",CountryIds,") ELSE 1=1 END ",@prb," 
+AND CASE WHEN '",AccountIds,"' <> '-1'  THEN FIND_IN_SET(sf.account_id,'",AccountIds,"')  ELSE 1=1 END 
+AND CASE WHEN (",unAssignedDiv," > 0 AND '",DivisionId,"'  != -1) THEN (FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"') OR (r.sf_owner_divisin_id IS NULL OR r.sf_owner_divisin_id = 0)) 
+WHEN  (",unAssignedDiv," = 0 AND '",DivisionId,"'  != -1) THEN    FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"')  ELSE 1=1 END
+ AND CASE WHEN('",contractId,"' != '-1' AND !LOCATE('999','",contractId,"')) THEN FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) 
+WHEN '",contractId,"' != '-1' AND LOCATE('999','",contractId,"') THEN  (FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) OR sf.service_type IS NULL) ELSE 1=1 END
+ AND CASE WHEN('",AccOwnId,"' != '-1' AND !LOCATE('999','",AccOwnId,"')) THEN FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) 
+WHEN '",AccOwnId,"' != '-1' AND LOCATE('999','",AccOwnId,"') THEN  (FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) OR cust.account_owner_id IS NULL) ELSE 1=1 END
+         group by owner_id,salesforce_opp_id");  
+       PREPARE STMT FROM @dynQry;
+		EXECUTE STMT; 
+        
+ DROP TEMPORARY TABLE IF EXISTS ActiveaverageElapsedTimeMain;
+CREATE TEMPORARY TABLE ActiveaverageElapsedTimeMain
+SELECT
+	
+	dh.owner_id,
+    dh.owner_name_copy as owner_name,
+    dh.salesforce_opp_id,
+    1470 as type_id,
+    COALESCE(SUM(dh.active) / NULLIF(sum(m.active), 0), 0) AS active,
+    dh.lvl,
+    case when d.created_by_date <= tc.quarterEndDt then QUARTER_FIRST_DAY(tc.quarterEndDt) end as QuarterCol
+FROM 
+    ActiveaverageElapsedTime dh 
+JOIN 
+    ActiveopportunityCount m ON dh.owner_id = m.owner_id 
+JOIN 
+	dhub_details d on dh.dhub_id = d.id
+    left join tmp_dates_copy tc on QUARTER_FIRST_DAY(d.created_by_date)= tc.quarterStDt
+
+GROUP BY 
+    dh.owner_id,tc.quarterStDt,tc.quarterEndDt;    
+    
+  DROP TEMPORARY TABLE IF EXISTS ActiveaverageDealSizeMain;
+CREATE TEMPORARY TABLE ActiveaverageDealSizeMain
+SELECT
+	
+	dh.owner_id,
+    dh.owner_name_copy as owner_name,
+	dh.salesforce_opp_id,
+    1471 as type_id,
+    COALESCE((sum(dh.active)) / NULLIF(sum(m.active), 0), 0) AS active,
+    dh.lvl,
+    case when d.created_by_date <= tc.quarterEndDt then QUARTER_FIRST_DAY(tc.quarterEndDt) end as QuarterCol
+FROM 
+    ActiveaverageDealSize dh 
+JOIN 
+    ActiveopportunityCount m ON dh.owner_id = m.owner_id 
+JOIN 
+	dhub_details d on dh.dhub_id = d.id
+    left join tmp_dates_copy tc on QUARTER_FIRST_DAY(d.created_by_date)= tc.quarterStDt   
+GROUP BY 
+    dh.owner_id,tc.quarterStDt,tc.quarterEndDt;
+
+
+DROP TEMPORARY TABLE IF EXISTS opportunityActiveCountWithQuarter;
+CREATE TEMPORARY TABLE opportunityActiveCountWithQuarter
+select sum(active) as active,QuarterCol from ActiveopportunityCount group by type_id,QuarterCol;
+
+DROP TEMPORARY TABLE IF EXISTS opportunityActiveAmountWithQuarter;
+CREATE TEMPORARY TABLE opportunityActiveAmountWithQuarter
+select sum(active) as active,QuarterCol from ActiveopportunityAmount group by type_id,QuarterCol;
+
+DROP TEMPORARY TABLE IF EXISTS opportunityActiveSummaryAverageDealSize;
+CREATE TEMPORARY TABLE opportunityActiveSummaryAverageDealSize
+select 1471 as type_id,Round(aa.active/ac.active) as active,aa.QuarterCol from opportunityActiveAmountWithQuarter aa join opportunityActiveCountWithQuarter ac on aa.QuarterCol = ac.QuarterCol;
+
+       
+  
+    DROP TEMPORARY TABLE IF exists opportunityCount;
+         SET @dynQry = CONCAT("CREATE TEMPORARY TABLE opportunityCount
+         
+					SELECT Distinct
+                    dp.owner_id as owner_id,
+                    1466 as type_id,
+				  CONCAT(u.first_name, ' ', u.last_name) AS owner_name,
+				   dh.opportunity_id as salesforce_opp_id,
+				  0 AS active,
+				  COUNT(CASE WHEN sf.probability = 100 AND dh.dhub_status_id=1455 THEN 1 END) AS won,
+				  COUNT(CASE WHEN sf.probability = 0  THEN 1 END) AS lost,
+				  2 as lvl,QUARTER_FIRST_DAY(sf.close_date) as QuarterCol FROM dhub_details dh 
+				 JOIN dhub_particpants dp ON dh.id = dp.dhub_id   and dp.is_active=1
+                 JOIN salesforce_opportunities sf ON sf.salesforce_opp_id = dh.opportunity_id and dh.is_active=1
+				 JOIN resources r ON dp.owner_id = r.id
+                 LEFT JOIN customers cust ON cust.id = sf.customer_id
+",@joinCondition,"
+				 JOIN users u ON r.user_id = u.id
+                 where dp.is_active = 1 AND dp.role_id = 1447 and dh.is_active=1
+AND CASE WHEN '",CountryIds,"' != '-1' THEN  sf.country_id IN (",CountryIds,") ELSE 1=1 END ",@prb," 
+AND CASE WHEN '",AccountIds,"' <> '-1'  THEN FIND_IN_SET(sf.account_id,'",AccountIds,"')  ELSE 1=1 END 
+AND CASE WHEN (",unAssignedDiv," > 0 AND '",DivisionId,"'  != -1) THEN (FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"') OR (r.sf_owner_divisin_id IS NULL OR r.sf_owner_divisin_id = 0)) 
+WHEN  (",unAssignedDiv," = 0 AND '",DivisionId,"'  != -1) THEN    FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"')  ELSE 1=1 END
+ AND CASE WHEN('",contractId,"' != '-1' AND !LOCATE('999','",contractId,"')) THEN FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) 
+WHEN '",contractId,"' != '-1' AND LOCATE('999','",contractId,"') THEN  (FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) OR sf.service_type IS NULL) ELSE 1=1 END
+AND CASE WHEN('",AccOwnId,"' != '-1' AND !LOCATE('999','",AccOwnId,"')) THEN FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) 
+WHEN '",AccOwnId,"' != '-1' AND LOCATE('999','",AccOwnId,"') THEN  (FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) OR cust.account_owner_id IS NULL) ELSE 1=1 END
+				GROUP BY u.id,salesforce_opp_id"); 
+PREPARE STMT FROM @dynQry;
+		EXECUTE STMT; 
+        
+ DROP TEMPORARY TABLE IF EXISTS opportunityAmount;
+SET @dynQry = CONCAT("CREATE TEMPORARY TABLE opportunityAmount
+ SELECT 
+    dp.owner_id,
+    CONCAT(u.first_name, ' ', u.last_name) as owner_name,
+    sf.salesforce_opp_id,
+    1467 as type_id,
+    sf.amount,
+    0 as active,
+    SUM(CASE WHEN dh.dhub_status_id = 1455 AND sf.probability = 100 THEN sf.amount ELSE 0 END) as won,
+    SUM(CASE WHEN sf.probability = 0  THEN sf.amount ELSE 0 END) as lost,
+    2 as lvl,QUARTER_FIRST_DAY(sf.close_date) as QuarterCol
+FROM 
+    salesforce_opportunities sf
+JOIN 
+    dhub_details dh ON sf.salesforce_opp_id = dh.opportunity_id and dh.is_active=1
+JOIN 
+    dhub_particpants dp ON dh.id = dp.dhub_id and dp.is_active=1
+    LEFT JOIN customers cust ON cust.id = sf.customer_id
+",@joinCondition,"
+LEFT JOIN 
+    resources r ON dp.owner_id = r.id
+LEFT JOIN 
+    users u ON r.user_id = u.id
+WHERE 
+    dp.role_id IN (1447 ) 
+AND CASE WHEN '",CountryIds,"' != '-1' THEN  sf.country_id IN (",CountryIds,") ELSE 1=1 END ",@prb," 
+AND CASE WHEN '",AccountIds,"' <> '-1'  THEN FIND_IN_SET(sf.account_id,'",AccountIds,"')  ELSE 1=1 END 
+AND CASE WHEN (",unAssignedDiv," > 0 AND '",DivisionId,"'  != -1) THEN (FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"') OR (r.sf_owner_divisin_id IS NULL OR r.sf_owner_divisin_id = 0)) 
+WHEN  (",unAssignedDiv," = 0 AND '",DivisionId,"'  != -1) THEN    FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"')  ELSE 1=1 END
+ AND CASE WHEN('",contractId,"' != '-1' AND !LOCATE('999','",contractId,"')) THEN FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) 
+WHEN '",contractId,"' != '-1' AND LOCATE('999','",contractId,"') THEN  (FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) OR sf.service_type IS NULL) ELSE 1=1 END
+AND CASE WHEN('",AccOwnId,"' != '-1' AND !LOCATE('999','",AccOwnId,"')) THEN FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) 
+WHEN '",AccOwnId,"' != '-1' AND LOCATE('999','",AccOwnId,"') THEN  (FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) OR cust.account_owner_id IS NULL) ELSE 1=1 END
+GROUP BY 
+    sf.salesforce_opp_id, dp.owner_id, dp.id");
+    PREPARE STMT FROM @dynQry;
+		EXECUTE STMT; 
+    
+DROP TEMPORARY TABLE IF EXISTS ownerEffortAndActualHrs;
+SET @dynQry = CONCAT("CREATE TEMPORARY TABLE ownerEffortAndActualHrs
+SELECT 
+    dp.owner_id,
+    CONCAT(u.first_name, ' ', u.last_name) as owner_name,
+    sf.salesforce_opp_id,
+    sf.amount,
+    0 as active,
+    SUM(CASE WHEN dh.dhub_status_id = 1455 AND sf.probability = 100 THEN dp.effort_hrs ELSE 0 END) as won,
+    SUM(CASE WHEN sf.probability = 0  THEN dp.effort_hrs ELSE 0 END) as lost,
+	0 as active_actual_hrs,
+    SUM(CASE WHEN dh.dhub_status_id = 1455 AND sf.probability = 100 THEN dp.actual_hrs ELSE 0 END) as won_actual_hrs,
+    SUM(CASE WHEN sf.probability = 0  THEN dp.actual_hrs ELSE 0 END) as lost_actual_hrs,
+    dh.id as dhub_id,
+    dp.role_id,
+    2 as lvl
+FROM 
+    salesforce_opportunities sf
+JOIN 
+    dhub_details dh ON sf.salesforce_opp_id = dh.opportunity_id and dh.is_active=1
+JOIN 
+    dhub_particpants dp ON dh.id = dp.dhub_id and dp.is_active=1
+    LEFT JOIN customers cust ON cust.id = sf.customer_id
+",@joinCondition,"
+LEFT JOIN 
+    resources r ON dp.owner_id = r.id
+LEFT JOIN 
+    users u ON r.user_id = u.id
+WHERE 
+    dp.role_id IN (1447)
+AND CASE WHEN '",CountryIds,"' != '-1' THEN  sf.country_id IN (",CountryIds,") ELSE 1=1 END ",@prb," 
+AND CASE WHEN '",AccountIds,"' <> '-1'  THEN FIND_IN_SET(sf.account_id,'",AccountIds,"')  ELSE 1=1 END 
+AND CASE WHEN (",unAssignedDiv," > 0 AND '",DivisionId,"'  != -1) THEN (FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"') OR (r.sf_owner_divisin_id IS NULL OR r.sf_owner_divisin_id = 0)) 
+WHEN  (",unAssignedDiv," = 0 AND '",DivisionId,"'  != -1) THEN    FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"')  ELSE 1=1 END
+ AND CASE WHEN('",contractId,"' != '-1' AND !LOCATE('999','",contractId,"')) THEN FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) 
+WHEN '",contractId,"' != '-1' AND LOCATE('999','",contractId,"') THEN  (FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) OR sf.service_type IS NULL) ELSE 1=1 END
+ AND CASE WHEN('",AccOwnId,"' != '-1' AND !LOCATE('999','",AccOwnId,"')) THEN FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) 
+WHEN '",AccOwnId,"' != '-1' AND LOCATE('999','",AccOwnId,"') THEN  (FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) OR cust.account_owner_id IS NULL) ELSE 1=1 END
+      GROUP BY 
+    sf.salesforce_opp_id, dp.owner_id, dp.id");
+    PREPARE STMT FROM @dynQry;
+		EXECUTE STMT; 
+    
+DROP TEMPORARY TABLE IF EXISTS participantsEffortAndActualHrs;
+SET @dynQry = CONCAT("CREATE TEMPORARY TABLE participantsEffortAndActualHrs
+SELECT 
+    dp.owner_id,
+    CONCAT(u.first_name, ' ', u.last_name) as owner_name,
+    sf.salesforce_opp_id,
+    sf.amount,
+    0 as active,
+    SUM(CASE WHEN dh.dhub_status_id = 1455 AND sf.probability = 100 THEN dp.effort_hrs ELSE 0 END) as won,
+    SUM(CASE WHEN sf.probability = 0  THEN dp.effort_hrs ELSE 0 END) as lost,
+    0 as active_actual_hrs,
+    SUM(CASE WHEN dh.dhub_status_id = 1455 AND sf.probability = 100 THEN dp.actual_hrs ELSE 0 END) as won_actual_hrs,
+    SUM(CASE WHEN sf.probability = 0  THEN dp.actual_hrs ELSE 0 END) as lost_actual_hrs,
+    dh.id as dhub_id,
+    dp.role_id,
+    2 as lvl
+FROM 
+    salesforce_opportunities sf
+JOIN 
+    dhub_details dh ON sf.salesforce_opp_id = dh.opportunity_id and dh.is_active=1
+JOIN 
+    dhub_particpants dp ON dh.id = dp.dhub_id and dp.is_active=1
+    LEFT JOIN customers cust ON cust.id = sf.customer_id
+",@joinCondition,"
+LEFT JOIN 
+    resources r ON dp.owner_id = r.id
+LEFT JOIN 
+    users u ON r.user_id = u.id
+WHERE 
+    dp.role_id IN (1448,1449,1450,1451,1463)
+AND CASE WHEN '",CountryIds,"' != '-1' THEN  sf.country_id IN (",CountryIds,") ELSE 1=1 END ",@prb," 
+AND CASE WHEN '",AccountIds,"' <> '-1'  THEN FIND_IN_SET(sf.account_id,'",AccountIds,"')  ELSE 1=1 END 
+AND CASE WHEN (",unAssignedDiv," > 0 AND '",DivisionId,"'  != -1) THEN (FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"') OR (r.sf_owner_divisin_id IS NULL OR r.sf_owner_divisin_id = 0)) 
+WHEN  (",unAssignedDiv," = 0 AND '",DivisionId,"'  != -1) THEN    FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"')  ELSE 1=1 END
+ AND CASE WHEN('",contractId,"' != '-1' AND !LOCATE('999','",contractId,"')) THEN FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) 
+WHEN '",contractId,"' != '-1' AND LOCATE('999','",contractId,"') THEN  (FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) OR sf.service_type IS NULL) ELSE 1=1 END
+AND CASE WHEN('",AccOwnId,"' != '-1' AND !LOCATE('999','",AccOwnId,"')) THEN FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) 
+WHEN '",AccOwnId,"' != '-1' AND LOCATE('999','",AccOwnId,"') THEN  (FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) OR cust.account_owner_id IS NULL) ELSE 1=1 END
+GROUP BY 
+    sf.salesforce_opp_id, dp.owner_id, dp.id");
+
+    PREPARE STMT FROM @dynQry;
+		EXECUTE STMT; 
+        
+DROP TEMPORARY TABLE IF EXISTS combinedHrs;
+CREATE TEMPORARY TABLE combinedHrs
+SELECT
+    dhub_id,
+    salesforce_opp_id,
+    SUM(active) as total_active,
+    SUM(won) as total_won,
+    SUM(lost) as total_lost,
+    SUM(active_actual_hrs) as total_active_actual_hrs,
+    SUM(won_actual_hrs) as total_won_actual_hrs,
+    SUM(lost_actual_hrs) as total_lost_actual_hrs
+FROM
+    (
+        SELECT * FROM ownerEffortAndActualHrs
+        UNION ALL
+        SELECT * FROM participantsEffortAndActualHrs
+    ) combined_data
+GROUP BY
+    dhub_id;
+
+ DROP TEMPORARY TABLE IF EXISTS combinedHrsWithOwner;
+ CREATE TEMPORARY TABLE combinedHrsWithOwner
+ select dp.owner_id,concat(u.first_name,' ',u.last_name) as owner_name_copy,ch.salesforce_opp_id,ch.total_active,ch.total_won,ch.total_lost,ch.total_active_actual_hrs,ch.total_won_actual_hrs,ch.total_lost_actual_hrs,2 as lvl from combinedHrs ch
+join dhub_particpants dp on dp.dhub_id = ch.dhub_id and dp.is_active=1
+join resources r on dp.owner_id = r.id
+join users u on r.user_id = u.id
+where dp.role_id = 1447;    
+
+
+
+ DROP TEMPORARY TABLE IF EXISTS effortHrs;
+CREATE TEMPORARY TABLE effortHrs
+select co.owner_id,co.owner_name_copy as owner_name,co.salesforce_opp_id,1468 as type_id,co.total_active as active,co.total_won as won,co.total_lost as lost,
+lvl,QUARTER_FIRST_DAY(sf.close_date) as QuarterCol 
+from combinedHrsWithOwner co
+JOIN salesforce_opportunities sf ON sf.salesforce_opp_id = co.salesforce_opp_id;
+
+DROP TEMPORARY TABLE IF EXISTS actualHrs;
+CREATE TEMPORARY TABLE actualHrs
+select co.owner_id,co.owner_name_copy as owner_name,co.salesforce_opp_id,1469 as type_id,co.total_active_actual_hrs as active,co.total_won_actual_hrs as won,co.total_lost_actual_hrs as lost, 
+co.lvl,QUARTER_FIRST_DAY(sf.close_date) as QuarterCol 
+from combinedHrsWithOwner co
+JOIN salesforce_opportunities sf ON sf.salesforce_opp_id = co.salesforce_opp_id;
+
+
+
+DROP TEMPORARY TABLE IF EXISTS averageElapsedTime;
+SET @dynQry = CONCAT("CREATE TEMPORARY TABLE averageElapsedTime
+SELECT   CONCAT(u.first_name,' ',u.last_name) as owner_name_copy,
+    sf.salesforce_opp_id,
+    dh.id as dhub_id,
+    sf.close_date,
+    dh.created_by_date,
+	dp.owner_id,
+    DATEDIFF(sf.close_date, dh.created_by_date) as days_difference,
+    0 as active,
+    CASE WHEN won.won_flag <> 0 THEN DATEDIFF(sf.close_date,dh.created_by_date) END as won,
+    CASE WHEN lost.lost_flag <> 0 THEN DATEDIFF(sf.close_date,dh.created_by_date) END as lost,
+    2 as lvl
+FROM 
+    salesforce_opportunities sf
+JOIN 
+    dhub_details dh ON sf.salesforce_opp_id = dh.opportunity_id and dh.is_active=1
+JOIN 
+    dhub_particpants dp ON dh.id = dp.dhub_id   and dp.is_active=1
+    LEFT JOIN customers cust ON cust.id = sf.customer_id
+",@joinCondition,"
+LEFT JOIN 
+    resources r ON dp.owner_id = r.id
+LEFT JOIN 
+    users u ON r.user_id = u.id
+LEFT JOIN (
+    SELECT 
+        sf.salesforce_opp_id,
+        dp.owner_id,
+        SUM(dp.effort_hrs) as total_effort_hours,
+        MAX(CASE WHEN dh.dhub_status_id IN(1452,1453,1455,1457) AND (dp.signed_off = 0 OR dp.signed_off = 1) and sf.probability <>100 and sf.probability <>0 THEN 1 ELSE 0 END) as active_flag
+    FROM 
+        salesforce_opportunities sf
+    JOIN 
+        dhub_details dh ON sf.salesforce_opp_id = dh.opportunity_id  and dh.is_active=1
+    JOIN 
+        dhub_particpants dp ON dh.id = dp.dhub_id  and dp.is_active=1
+        LEFT JOIN customers cust ON cust.id = sf.customer_id
+",@joinCondition,"
+        left join resources r on dp.owner_id=r.id
+    WHERE 
+        dp.role_id IN (1447  ) 
+AND CASE WHEN '",CountryIds,"' != '-1' THEN  sf.country_id IN (",CountryIds,") ELSE 1=1 END ",@prb," 
+AND CASE WHEN '",AccountIds,"' <> '-1'  THEN FIND_IN_SET(sf.account_id,'",AccountIds,"')  ELSE 1=1 END 
+AND CASE WHEN (",unAssignedDiv," > 0 AND '",DivisionId,"'  != -1) THEN (FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"') OR (r.sf_owner_divisin_id IS NULL OR r.sf_owner_divisin_id = 0)) 
+WHEN  (",unAssignedDiv," = 0 AND '",DivisionId,"'  != -1) THEN    FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"')  ELSE 1=1 END
+ AND CASE WHEN('",contractId,"' != '-1' AND !LOCATE('999','",contractId,"')) THEN FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) 
+WHEN '",contractId,"' != '-1' AND LOCATE('999','",contractId,"') THEN  (FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) OR sf.service_type IS NULL) ELSE 1=1 END
+ AND CASE WHEN('",AccOwnId,"' != '-1' AND !LOCATE('999','",AccOwnId,"')) THEN FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) 
+WHEN '",AccOwnId,"' != '-1' AND LOCATE('999','",AccOwnId,"') THEN  (FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) OR cust.account_owner_id IS NULL) ELSE 1=1 END
+      GROUP BY 
+        sf.salesforce_opp_id, dp.owner_id
+) as active ON sf.salesforce_opp_id = active.salesforce_opp_id AND dp.owner_id = active.owner_id
+LEFT JOIN (
+    SELECT 
+        sf.salesforce_opp_id,
+        dp.owner_id,
+        SUM(dp.effort_hrs) as total_effort_hours,
+        MAX(CASE WHEN dh.dhub_status_id = 1455 AND sf.probability = 100 THEN 1 ELSE 0 END) as won_flag
+    FROM 
+        salesforce_opportunities sf
+    JOIN 
+        dhub_details dh ON sf.salesforce_opp_id = dh.opportunity_id  and dh.is_active=1
+    JOIN 
+        dhub_particpants dp ON dh.id = dp.dhub_id   and dp.is_active=1
+        LEFT JOIN customers cust ON cust.id = sf.customer_id
+",@joinCondition,"
+        left join resources r ON dp.owner_id=r.id
+    WHERE 
+        dp.role_id IN (1447  )
+AND CASE WHEN '",CountryIds,"' != '-1' THEN  sf.country_id IN (",CountryIds,") ELSE 1=1 END ",@prb," 
+AND CASE WHEN '",AccountIds,"' <> '-1'  THEN FIND_IN_SET(sf.account_id,'",AccountIds,"')  ELSE 1=1 END 
+AND CASE WHEN (",unAssignedDiv," > 0 AND '",DivisionId,"'  != -1) THEN (FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"') OR (r.sf_owner_divisin_id IS NULL OR r.sf_owner_divisin_id = 0)) 
+WHEN  (",unAssignedDiv," = 0 AND '",DivisionId,"'  != -1) THEN    FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"')  ELSE 1=1 END
+ AND CASE WHEN('",contractId,"' != '-1' AND !LOCATE('999','",contractId,"')) THEN FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) 
+WHEN '",contractId,"' != '-1' AND LOCATE('999','",contractId,"') THEN  (FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) OR sf.service_type IS NULL) ELSE 1=1 END
+  AND CASE WHEN('",AccOwnId,"' != '-1' AND !LOCATE('999','",AccOwnId,"')) THEN FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) 
+WHEN '",AccOwnId,"' != '-1' AND LOCATE('999','",AccOwnId,"') THEN  (FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) OR cust.account_owner_id IS NULL) ELSE 1=1 END
+     GROUP BY 
+        sf.salesforce_opp_id, dp.owner_id
+) as won ON sf.salesforce_opp_id = won.salesforce_opp_id AND dp.owner_id = won.owner_id
+LEFT JOIN (
+    SELECT 
+        sf.salesforce_opp_id,
+        dp.owner_id,
+        SUM(dp.effort_hrs) as total_effort_hours,
+        MAX(CASE WHEN sf.probability = 0  THEN 1 ELSE 0 END) as lost_flag
+    FROM 
+        salesforce_opportunities sf
+    JOIN 
+        dhub_details dh ON sf.salesforce_opp_id = dh.opportunity_id and dh.is_active=1
+    JOIN 
+        dhub_particpants dp ON dh.id = dp.dhub_id  and dp.is_active=1
+        LEFT JOIN customers cust ON cust.id = sf.customer_id
+",@joinCondition,"
+	LEFT JOIN resources r ON dp.owner_id=r.id
+    WHERE 
+        dp.role_id IN (1447  )
+AND CASE WHEN '",CountryIds,"' != '-1' THEN  sf.country_id IN (",CountryIds,") ELSE 1=1 END ",@prb," 
+AND CASE WHEN '",AccountIds,"' <> '-1'  THEN FIND_IN_SET(sf.account_id,'",AccountIds,"')  ELSE 1=1 END 
+AND CASE WHEN (",unAssignedDiv," > 0 AND '",DivisionId,"'  != -1) THEN (FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"') OR (r.sf_owner_divisin_id IS NULL OR r.sf_owner_divisin_id = 0)) 
+WHEN  (",unAssignedDiv," = 0 AND '",DivisionId,"'  != -1) THEN    FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"')  ELSE 1=1 END
+ AND CASE WHEN('",contractId,"' != '-1' AND !LOCATE('999','",contractId,"')) THEN FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) 
+WHEN '",contractId,"' != '-1' AND LOCATE('999','",contractId,"') THEN  (FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) OR sf.service_type IS NULL) ELSE 1=1 END
+ AND CASE WHEN('",AccOwnId,"' != '-1' AND !LOCATE('999','",AccOwnId,"')) THEN FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) 
+WHEN '",AccOwnId,"' != '-1' AND LOCATE('999','",AccOwnId,"') THEN  (FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) OR cust.account_owner_id IS NULL) ELSE 1=1 END
+      GROUP BY         sf.salesforce_opp_id, dp.owner_id
+) as lost ON sf.salesforce_opp_id = lost.salesforce_opp_id AND dp.owner_id = lost.owner_id
+WHERE 
+    dp.role_id IN (1447  )
+AND CASE WHEN '",CountryIds,"' != '-1' THEN  sf.country_id IN (",CountryIds,") ELSE 1=1 END ",@prb," 
+AND CASE WHEN '",AccountIds,"' <> '-1'  THEN FIND_IN_SET(sf.account_id,'",AccountIds,"')  ELSE 1=1 END 
+AND CASE WHEN (",unAssignedDiv," > 0 AND '",DivisionId,"'  != -1) THEN (FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"') OR (r.sf_owner_divisin_id IS NULL OR r.sf_owner_divisin_id = 0)) 
+WHEN  (",unAssignedDiv," = 0 AND '",DivisionId,"'  != -1) THEN    FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"')  ELSE 1=1 END
+ AND CASE WHEN('",contractId,"' != '-1' AND !LOCATE('999','",contractId,"')) THEN FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) 
+WHEN '",contractId,"' != '-1' AND LOCATE('999','",contractId,"') THEN  (FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) OR sf.service_type IS NULL) ELSE 1=1 END
+AND CASE WHEN('",AccOwnId,"' != '-1' AND !LOCATE('999','",AccOwnId,"')) THEN FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) 
+WHEN '",AccOwnId,"' != '-1' AND LOCATE('999','",AccOwnId,"') THEN  (FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) OR cust.account_owner_id IS NULL) ELSE 1=1 END
+    ");
+     
+	
+PREPARE STMT FROM @dynQry;
+		EXECUTE STMT; 	
+	
+	
+DROP TEMPORARY TABLE IF EXISTS averageDealSize;
+SET @dynQry = CONCAT("CREATE TEMPORARY TABLE 	averageDealSize
+SELECT 
+    CONCAT(u.first_name,' ',u.last_name) as owner_name_copy,
+    sf.salesforce_opp_id,
+    sum(sf.amount),
+    dh.id as dhub_id,
+    dp.owner_id,
+	0  as active,
+    CASE WHEN won.won_flag <> 0 THEN sum(sf.amount / won.won_flag) ELSE 0 END as won,
+    CASE WHEN lost.lost_flag <> 0 THEN sum(sf.amount / lost.lost_flag) ELSE 0 END as lost,
+    2 as lvl
+FROM 
+    salesforce_opportunities sf
+JOIN 
+    dhub_details dh ON sf.salesforce_opp_id = dh.opportunity_id and dh.is_active=1
+JOIN 
+    dhub_particpants dp ON dh.id = dp.dhub_id  and dp.is_active=1
+    LEFT JOIN customers cust ON cust.id = sf.customer_id
+",@joinCondition,"
+LEFT JOIN 
+    resources r ON dp.owner_id = r.id
+LEFT JOIN 
+    users u ON r.user_id = u.id
+LEFT JOIN (
+    SELECT 
+        sf.salesforce_opp_id,
+        dp.owner_id,
+        MAX(CASE WHEN dh.dhub_status_id IN(1452,1453,1455,1457) AND (dp.signed_off = 0 OR dp.signed_off = 1) and sf.probability <>100 and sf.probability <>0 THEN 1 ELSE 0 END) as active_flag
+    FROM 
+        salesforce_opportunities sf
+    JOIN 
+        dhub_details dh ON sf.salesforce_opp_id = dh.opportunity_id and dh.is_active=1
+    JOIN 
+        dhub_particpants dp ON dh.id = dp.dhub_id  and dp.is_active=1
+        LEFT JOIN customers cust ON cust.id = sf.customer_id
+",@joinCondition,"
+        left join resources r ON dp.owner_id=r.id
+    WHERE 
+        dp.role_id IN (1447  ) 
+AND CASE WHEN '",CountryIds,"' != '-1' THEN  sf.country_id IN (",CountryIds,") ELSE 1=1 END ",@prb," 
+AND CASE WHEN '",AccountIds,"' <> '-1'  THEN FIND_IN_SET(sf.account_id,'",AccountIds,"')  ELSE 1=1 END 
+AND CASE WHEN (",unAssignedDiv," > 0 AND '",DivisionId,"'  != -1) THEN (FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"') OR (r.sf_owner_divisin_id IS NULL OR r.sf_owner_divisin_id = 0)) 
+WHEN  (",unAssignedDiv," = 0 AND '",DivisionId,"'  != -1) THEN    FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"')  ELSE 1=1 END
+ AND CASE WHEN('",contractId,"' != '-1' AND !LOCATE('999','",contractId,"')) THEN FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) 
+WHEN '",contractId,"' != '-1' AND LOCATE('999','",contractId,"') THEN  (FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) OR sf.service_type IS NULL) ELSE 1=1 END
+AND CASE WHEN('",AccOwnId,"' != '-1' AND !LOCATE('999','",AccOwnId,"')) THEN FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) 
+WHEN '",AccOwnId,"' != '-1' AND LOCATE('999','",AccOwnId,"') THEN  (FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) OR cust.account_owner_id IS NULL) ELSE 1=1 END
+       GROUP BY 
+        sf.salesforce_opp_id, dp.owner_id
+) as active ON sf.salesforce_opp_id = active.salesforce_opp_id AND dp.owner_id = active.owner_id
+LEFT JOIN (
+    SELECT 
+        sf.salesforce_opp_id,
+        dp.owner_id,
+        MAX(CASE WHEN dh.dhub_status_id = 1455 AND sf.probability = 100 THEN 1 ELSE 0 END) as won_flag
+    FROM 
+        salesforce_opportunities sf
+    JOIN 
+        dhub_details dh ON sf.salesforce_opp_id = dh.opportunity_id and dh.is_active=1
+    JOIN 
+        dhub_particpants dp ON dh.id = dp.dhub_id  and dp.is_active=1
+        LEFT JOIN customers cust ON cust.id = sf.customer_id
+",@joinCondition,"
+        left join resources r ON dp.owner_id=r.id
+    WHERE 
+        dp.role_id IN (1447  ) 
+AND CASE WHEN '",CountryIds,"' != '-1' THEN  sf.country_id IN (",CountryIds,") ELSE 1=1 END ",@prb," 
+AND CASE WHEN '",AccountIds,"' <> '-1'  THEN FIND_IN_SET(sf.account_id,'",AccountIds,"')  ELSE 1=1 END 
+AND CASE WHEN (",unAssignedDiv," > 0 AND '",DivisionId,"'  != -1) THEN (FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"') OR (r.sf_owner_divisin_id IS NULL OR r.sf_owner_divisin_id = 0)) 
+WHEN  (",unAssignedDiv," = 0 AND '",DivisionId,"'  != -1) THEN    FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"')  ELSE 1=1 END
+ AND CASE WHEN('",contractId,"' != '-1' AND !LOCATE('999','",contractId,"')) THEN FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) 
+WHEN '",contractId,"' != '-1' AND LOCATE('999','",contractId,"') THEN  (FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) OR sf.service_type IS NULL) ELSE 1=1 END
+AND CASE WHEN('",AccOwnId,"' != '-1' AND !LOCATE('999','",AccOwnId,"')) THEN FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) 
+WHEN '",AccOwnId,"' != '-1' AND LOCATE('999','",AccOwnId,"') THEN  (FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) OR cust.account_owner_id IS NULL) ELSE 1=1 END
+       GROUP BY 
+        sf.salesforce_opp_id, dp.owner_id
+) as won ON sf.salesforce_opp_id = won.salesforce_opp_id AND dp.owner_id = won.owner_id
+LEFT JOIN (
+    SELECT 
+        sf.salesforce_opp_id,
+        dp.owner_id,
+        MAX(CASE WHEN sf.probability = 0 THEN 1 ELSE 0 END) as lost_flag
+    FROM 
+        salesforce_opportunities sf
+    JOIN 
+        dhub_details dh ON sf.salesforce_opp_id = dh.opportunity_id and dh.is_active=1
+    JOIN 
+        dhub_particpants dp ON dh.id = dp.dhub_id  and dp.is_active=1
+        LEFT JOIN customers cust ON cust.id = sf.customer_id
+",@joinCondition,"
+        left join resources r ON dp.owner_id=r.id
+    WHERE 
+        dp.role_id IN (1447  ) 
+AND CASE WHEN '",CountryIds,"' != '-1' THEN  sf.country_id IN (",CountryIds,") ELSE 1=1 END ",@prb," 
+AND CASE WHEN '",AccountIds,"' <> '-1'  THEN FIND_IN_SET(sf.account_id,'",AccountIds,"')  ELSE 1=1 END 
+AND CASE WHEN (",unAssignedDiv," > 0 AND '",DivisionId,"'  != -1) THEN (FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"') OR (r.sf_owner_divisin_id IS NULL OR r.sf_owner_divisin_id = 0)) 
+WHEN  (",unAssignedDiv," = 0 AND '",DivisionId,"'  != -1) THEN    FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"')  ELSE 1=1 END
+ AND CASE WHEN('",contractId,"' != '-1' AND !LOCATE('999','",contractId,"')) THEN FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) 
+WHEN '",contractId,"' != '-1' AND LOCATE('999','",contractId,"') THEN  (FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) OR sf.service_type IS NULL) ELSE 1=1 END
+AND CASE WHEN('",AccOwnId,"' != '-1' AND !LOCATE('999','",AccOwnId,"')) THEN FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) 
+WHEN '",AccOwnId,"' != '-1' AND LOCATE('999','",AccOwnId,"') THEN  (FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) OR cust.account_owner_id IS NULL) ELSE 1=1 END
+       GROUP BY 
+        sf.salesforce_opp_id, dp.owner_id
+) as lost ON sf.salesforce_opp_id = lost.salesforce_opp_id AND dp.owner_id = lost.owner_id
+WHERE 
+    dp.role_id IN (1447  ) 
+AND CASE WHEN '",CountryIds,"' != '-1' THEN  sf.country_id IN (",CountryIds,") ELSE 1=1 END ",@prb," 
+AND CASE WHEN '",AccountIds,"' <> '-1'  THEN FIND_IN_SET(sf.account_id,'",AccountIds,"')  ELSE 1=1 END 
+AND CASE WHEN (",unAssignedDiv," > 0 AND '",DivisionId,"'  != -1) THEN (FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"') OR (r.sf_owner_divisin_id IS NULL OR r.sf_owner_divisin_id = 0)) 
+WHEN  (",unAssignedDiv," = 0 AND '",DivisionId,"'  != -1) THEN    FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"')  ELSE 1=1 END
+ AND CASE WHEN('",contractId,"' != '-1' AND !LOCATE('999','",contractId,"')) THEN FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) 
+WHEN '",contractId,"' != '-1' AND LOCATE('999','",contractId,"') THEN  (FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) OR sf.service_type IS NULL) ELSE 1=1 END
+ AND CASE WHEN('",AccOwnId,"' != '-1' AND !LOCATE('999','",AccOwnId,"')) THEN FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) 
+WHEN '",AccOwnId,"' != '-1' AND LOCATE('999','",AccOwnId,"') THEN  (FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) OR cust.account_owner_id IS NULL) ELSE 1=1 END
+   group by owner_id,salesforce_opp_id");
+PREPARE STMT FROM @dynQry;
+		EXECUTE STMT; 
+        
+DROP TEMPORARY TABLE IF EXISTS averageElapsedTimeMain;
+CREATE TEMPORARY TABLE averageElapsedTimeMain
+SELECT
+	
+	dh.owner_id,
+    dh.owner_name_copy as owner_name,
+    dh.salesforce_opp_id,
+    1470 as type_id,
+    0 AS active,
+    COALESCE((dh.won) / NULLIF(sum(m.won), 0), 0) AS won,
+    COALESCE((dh.lost) / NULLIF(sum(m.lost), 0), 0) AS lost,
+    dh.lvl,
+    QUARTER_FIRST_DAY(sf.close_date) as QuarterCol
+FROM 
+    averageElapsedTime dh 
+JOIN 
+    opportunityCount m ON dh.owner_id = m.owner_id 
+JOIN 
+	salesforce_opportunities sf on sf.salesforce_opp_id = dh.salesforce_opp_id
+GROUP BY 
+    dh.owner_id,salesforce_opp_id;
+
+DROP TEMPORARY TABLE IF EXISTS averageDealSizeMain;
+CREATE TEMPORARY TABLE averageDealSizeMain
+SELECT
+	
+	dh.owner_id,
+    dh.owner_name_copy as owner_name,
+	dh.salesforce_opp_id,
+    1471 as type_id,
+    0 AS active,
+    COALESCE((dh.won) / NULLIF(sum(m.won), 0), 0) AS won,
+    COALESCE((dh.lost) / NULLIF(sum(m.lost), 0), 0) AS lost,
+    dh.lvl,
+    QUARTER_FIRST_DAY(sf.close_date) as QuarterCol
+FROM 
+    averageDealSize dh 
+JOIN 
+    opportunityCount m ON dh.owner_id = m.owner_id 
+JOIN 
+	salesforce_opportunities sf on sf.salesforce_opp_id = dh.salesforce_opp_id    
+GROUP BY 
+    dh.owner_id,salesforce_opp_id;
+
+DROP TEMPORARY TABLE IF EXISTS opportunityCountWithQuarter;
+CREATE TEMPORARY TABLE opportunityCountWithQuarter
+select sum(won) as won,sum(lost) as lost,QuarterCol from opportunityCount group by type_id,QuarterCol;
+
+DROP TEMPORARY TABLE IF EXISTS opportunityAmountWithQuarter;
+CREATE TEMPORARY TABLE opportunityAmountWithQuarter
+select sum(won) as won,sum(lost) as lost,QuarterCol from opportunityAmount group by type_id,QuarterCol;
+
+DROP TEMPORARY TABLE IF EXISTS opportunitySummaryAverageDealSize;
+CREATE TEMPORARY TABLE opportunitySummaryAverageDealSize
+select 1471 as type_id,0 as active,round(aa.won/ac.won) as won,round(aa.lost/ac.lost) as lost,aa.QuarterCol from opportunityAmountWithQuarter aa join opportunityCountWithQuarter ac on aa.QuarterCol = ac.QuarterCol;    
+    
+
+
+DROP TEMPORARY TABLE IF EXISTS AssignedOppCountData;
+		SET @dynQry = CONCAT("CREATE TEMPORARY TABLE AssignedOppCountData
+									SELECT owner_id, owner_name,salesforce_opp_id,type_id", @assignedCountSumQry,"
+									FROM(
+										SELECT owner_id, owner_name,salesforce_opp_id,type_id", @assignedCountCaseQry,"
+										FROM AssignedOpportunityCount 
+											
+									) a
+									GROUP BY owner_id
+							");
+		PREPARE AssignedOppCountData FROM @dynQry;
+		EXECUTE AssignedOppCountData;
+		SET @dynQry = CONCAT("UPDATE datas t
+									JOIN AssignedOppCountData upd ON t.id = upd.owner_id AND t.type_id = upd.type_id  
+								SET ",@updOppAssigned," where t.lvl=2"
+							);
+		PREPARE updSF FROM @dynQry;
+		EXECUTE updSF;	
+
+DROP TEMPORARY TABLE IF EXISTS AssignedOppAmountData;
+		SET @dynQry = CONCAT("CREATE TEMPORARY TABLE AssignedOppAmountData
+									SELECT owner_id, owner_name,salesforce_opp_id,type_id", @assignedCountSumQry,"
+									FROM(
+										SELECT owner_id, owner_name,salesforce_opp_id,type_id", @assignedCountCaseQry,"
+										FROM AssignedAmount 
+											
+									) a
+									GROUP BY owner_id
+							");
+                            
+		PREPARE AssignedOppAmountData FROM @dynQry;
+		EXECUTE AssignedOppAmountData;
+		SET @dynQry = CONCAT("UPDATE datas t
+									JOIN AssignedOppAmountData upd ON t.id = upd.owner_id AND t.type_id = upd.type_id  
+								SET ",@updOppAssigned," where t.lvl=2"
+							);
+		PREPARE updSF FROM @dynQry;
+		EXECUTE updSF;	
+        
+
+DROP TEMPORARY TABLE IF EXISTS updOppAmtData;
+		SET @dynQry = CONCAT("CREATE TEMPORARY TABLE updOppAmtData
+									SELECT owner_id, owner_name,salesforce_opp_id,type_id", @actamtSumQry,"", @wonamtSumQry,"", @lostamtSumQry,"
+									FROM(
+										SELECT owner_id, owner_name,salesforce_opp_id,type_id", @actamtCaseQry,"", @wonamtCaseQry,"", @lostamtCaseQry,"
+										FROM opportunityAmount 
+											
+									) a
+									GROUP BY owner_id
+							");
+		PREPARE updOppAmtData FROM @dynQry;
+		EXECUTE updOppAmtData;
+		SET @dynQry = CONCAT("UPDATE datas t
+									JOIN updOppAmtData upd ON t.id = upd.owner_id AND t.type_id = upd.type_id  
+								SET ",@updOppAmt," where t.lvl=2"
+							);
+		PREPARE updSF FROM @dynQry;
+		EXECUTE updSF;	
+    
+SET @dynSelCols = CONCAT("id,name,type_id,owner_name_copy,lvl,",@selCols); 
+       
+
+CALL StoreReportRunResultKeys(ReportRunId,'dhub analytics',CONCAT("",@dynSelCols,""));
+DROP TEMPORARY TABLE IF EXISTS updOppCountData;
+
+		SET @dynQry = CONCAT("CREATE TEMPORARY TABLE updOppCountData
+									SELECT owner_id, owner_name,salesforce_opp_id,type_id", @actamtSumQry,"", @wonamtSumQry,"", @lostamtSumQry,"
+									FROM(
+										SELECT owner_id, owner_name,salesforce_opp_id,type_id", @actamtCaseQry,"", @wonamtCaseQry,"", @lostamtCaseQry,"
+										FROM opportunityCount 
+											
+									) a
+									GROUP BY owner_id
+							");
+		PREPARE updOppCountData FROM @dynQry;
+		EXECUTE updOppCountData;
+		SET @dynQry = CONCAT("UPDATE datas t
+									JOIN updOppCountData upd ON t.id = upd.owner_id AND t.type_id = upd.type_id  
+								SET ",@updOppAmt," where t.lvl=2"
+							);
+		PREPARE updSF FROM @dynQry;
+		EXECUTE updSF;	
+        
+    
+ DROP TEMPORARY TABLE IF EXISTS ActiveOppCountData;
+		SET @dynQry = CONCAT("CREATE TEMPORARY TABLE ActiveOppCountData
+									SELECT owner_id, owner_name,salesforce_opp_id,type_id", @activeCountSumQry,"
+									FROM(
+										SELECT owner_id, owner_name,salesforce_opp_id,type_id", @activeCountCaseQry,"
+										FROM ActiveopportunityCount 
+											
+									) a
+									GROUP BY owner_id
+							");
+		PREPARE ActiveOppCountData FROM @dynQry;
+		EXECUTE ActiveOppCountData;
+		SET @dynQry = CONCAT("UPDATE datas t
+									JOIN ActiveOppCountData upd ON t.id = upd.owner_id AND t.type_id = upd.type_id  
+								SET ",@updOppActive," where t.lvl=2"
+							);
+		PREPARE updSF FROM @dynQry;
+		EXECUTE updSF;	
+
+DROP TEMPORARY TABLE IF EXISTS AactiveOppAmountData;
+		SET @dynQry = CONCAT("CREATE TEMPORARY TABLE AactiveOppAmountData
+									SELECT owner_id, owner_name,salesforce_opp_id,type_id", @activeCountSumQry,"
+									FROM(
+										SELECT owner_id, owner_name,salesforce_opp_id,type_id", @activeCountCaseQry,"
+										FROM ActiveopportunityAmount 
+											
+									) a
+									GROUP BY owner_id
+							");
+		PREPARE AactiveOppAmountData FROM @dynQry;
+		EXECUTE AactiveOppAmountData;
+		SET @dynQry = CONCAT("UPDATE datas t
+									JOIN AactiveOppAmountData upd ON t.id = upd.owner_id AND t.type_id = upd.type_id  
+								SET ",@updOppActive," where t.lvl=2"
+							);
+		PREPARE updSF FROM @dynQry;
+		EXECUTE updSF;	   
+        
+ DROP TEMPORARY TABLE IF EXISTS updOppEffortHrsData;
+		SET @dynQry = CONCAT("CREATE TEMPORARY TABLE updOppEffortHrsData
+									SELECT owner_id, owner_name,salesforce_opp_id,type_id", @actamtSumQry,"", @wonamtSumQry,"", @lostamtSumQry,"
+									FROM(
+										SELECT owner_id, owner_name,salesforce_opp_id,type_id", @actamtCaseQry,"", @wonamtCaseQry,"", @lostamtCaseQry,"
+										FROM effortHrs 
+											
+									) a
+									GROUP BY owner_id
+							");
+		PREPARE updOppEffortHrsData FROM @dynQry;
+		EXECUTE updOppEffortHrsData;
+		SET @dynQry = CONCAT("UPDATE datas t
+									JOIN updOppEffortHrsData upd ON t.id = upd.owner_id AND t.type_id = upd.type_id  
+								SET ",@updOppAmt," where t.lvl=2"
+							);
+		PREPARE updSF FROM @dynQry;
+		EXECUTE updSF;	    
+        
+
+ DROP TEMPORARY TABLE IF EXISTS updOppActualHrsData;
+		SET @dynQry = CONCAT("CREATE TEMPORARY TABLE updOppActualHrsData
+									SELECT owner_id, owner_name,salesforce_opp_id,type_id", @actamtSumQry,"", @wonamtSumQry,"", @lostamtSumQry,"
+									FROM(
+										SELECT owner_id, owner_name,salesforce_opp_id,type_id", @actamtCaseQry,"", @wonamtCaseQry,"", @lostamtCaseQry,"
+										FROM actualHrs 
+											
+									) a
+									GROUP BY owner_id
+							");
+		PREPARE updOppActualHrsData FROM @dynQry;
+		EXECUTE updOppActualHrsData;
+		SET @dynQry = CONCAT("UPDATE datas t
+									JOIN updOppActualHrsData upd ON t.id = upd.owner_id AND t.type_id = upd.type_id  
+								SET ",@updOppAmt," where t.lvl=2"
+							);
+		PREPARE updSF FROM @dynQry;
+		EXECUTE updSF;	
+
+ DROP TEMPORARY TABLE IF EXISTS ActiveupdOppEffortHrsData;
+		SET @dynQry = CONCAT("CREATE TEMPORARY TABLE ActiveupdOppEffortHrsData
+									SELECT owner_id, owner_name,salesforce_opp_id,type_id", @activeCountSumQry,"
+									FROM(
+										SELECT owner_id, owner_name,salesforce_opp_id,type_id", @activeCountCaseQry,"
+										FROM ActiveeffortHrs 
+											
+									) a
+									GROUP BY owner_id
+							");
+		PREPARE ActiveupdOppEffortHrsData FROM @dynQry;
+		EXECUTE ActiveupdOppEffortHrsData;
+		SET @dynQry = CONCAT("UPDATE datas t
+									JOIN ActiveupdOppEffortHrsData upd ON t.id = upd.owner_id AND t.type_id = upd.type_id  
+								SET ",@updOppActive," where t.lvl=2"
+							);
+		PREPARE updSF FROM @dynQry;
+		EXECUTE updSF;	    
+        
+
+ DROP TEMPORARY TABLE IF EXISTS ActiveupdOppActualHrsData;
+		SET @dynQry = CONCAT("CREATE TEMPORARY TABLE ActiveupdOppActualHrsData
+									SELECT owner_id, owner_name,salesforce_opp_id,type_id", @activeCountSumQry,"
+									FROM(
+										SELECT owner_id, owner_name,salesforce_opp_id,type_id", @activeCountCaseQry,"
+										FROM ActiveactualHrs 
+											
+									) a
+									GROUP BY owner_id
+							");
+		PREPARE ActiveupdOppActualHrsData FROM @dynQry;
+		EXECUTE ActiveupdOppActualHrsData;
+		SET @dynQry = CONCAT("UPDATE datas t
+									JOIN ActiveupdOppActualHrsData upd ON t.id = upd.owner_id AND t.type_id = upd.type_id  
+								SET ",@updOppActive," where t.lvl=2"
+							);
+		PREPARE updSF FROM @dynQry;
+		EXECUTE updSF;	   
+   
+   
+   
+ DROP TEMPORARY TABLE IF EXISTS updOppElapsedTimeData;
+		SET @dynQry = CONCAT("CREATE TEMPORARY TABLE updOppElapsedTimeData
+									SELECT owner_id, owner_name,salesforce_opp_id,type_id", @actamtSumQry,"", @wonamtSumQry,"", @lostamtSumQry,"
+									FROM(
+										SELECT owner_id, owner_name,salesforce_opp_id,type_id", @actamtCaseQry,"", @wonamtCaseQry,"", @lostamtCaseQry,"
+										FROM averageElapsedTimeMain 
+											
+									) a
+									GROUP BY owner_id
+							");
+		PREPARE updOppElapsedTimeData FROM @dynQry;
+		EXECUTE updOppElapsedTimeData;
+		SET @dynQry = CONCAT("UPDATE datas t
+									JOIN updOppElapsedTimeData upd ON t.id = upd.owner_id AND t.type_id = upd.type_id  
+								SET ",@updOppAmt," where t.lvl=2"
+							);
+		PREPARE updSF FROM @dynQry;
+		EXECUTE updSF;    
+
+ DROP TEMPORARY TABLE IF EXISTS ActiveupdOppElapsedTimeData;
+		SET @dynQry = CONCAT("CREATE TEMPORARY TABLE ActiveupdOppElapsedTimeData
+									SELECT owner_id, owner_name,salesforce_opp_id,type_id", @activeCountSumQry,"
+									FROM(
+										SELECT owner_id, owner_name,salesforce_opp_id,type_id", @activeCountCaseQry,"
+										FROM ActiveaverageElapsedTimeMain 
+											
+									) a
+									GROUP BY owner_id
+							");
+		PREPARE ActiveupdOppElapsedTimeData FROM @dynQry;
+		EXECUTE ActiveupdOppElapsedTimeData;
+		SET @dynQry = CONCAT("UPDATE datas t
+									JOIN ActiveupdOppElapsedTimeData upd ON t.id = upd.owner_id AND t.type_id = upd.type_id  
+								SET ",@updOppActive," where t.lvl=2"
+							);
+		PREPARE updSF FROM @dynQry;
+		EXECUTE updSF;
+
+ 
+        
+     DROP TEMPORARY TABLE IF EXISTS updOppDealHubSizeData;
+		SET @dynQry = CONCAT("CREATE TEMPORARY TABLE updOppDealHubSizeData
+									SELECT owner_id, owner_name,salesforce_opp_id,type_id", @actamtSumQry,"", @wonamtSumQry,"", @lostamtSumQry,"
+									FROM(
+										SELECT owner_id, owner_name,salesforce_opp_id,type_id", @actamtCaseQry,"", @wonamtCaseQry,"", @lostamtCaseQry,"
+										FROM averageDealSizeMain 
+											
+									) a
+									GROUP BY owner_id
+							");
+		PREPARE updOppDealHubSizeData FROM @dynQry;
+		EXECUTE updOppDealHubSizeData;
+		SET @dynQry = CONCAT("UPDATE datas t
+									JOIN updOppDealHubSizeData upd ON t.id = upd.owner_id AND t.type_id = upd.type_id  
+								SET ",@updOppAmt," where t.lvl=2"
+							);
+		PREPARE updSF FROM @dynQry;
+		EXECUTE updSF;    
+        
+  DROP TEMPORARY TABLE IF EXISTS ActiveupdOppDealHubSizeData;
+		SET @dynQry = CONCAT("CREATE TEMPORARY TABLE ActiveupdOppDealHubSizeData
+									SELECT owner_id, owner_name,salesforce_opp_id,type_id", @activeCountSumQry,"
+									FROM(
+										SELECT owner_id, owner_name,salesforce_opp_id,type_id", @activeCountCaseQry,"
+										FROM ActiveaverageDealSizeMain 
+											
+									) a
+									GROUP BY owner_id
+							");
+		PREPARE ActiveupdOppDealHubSizeData FROM @dynQry;
+		EXECUTE ActiveupdOppDealHubSizeData;
+		SET @dynQry = CONCAT("UPDATE datas t
+									JOIN ActiveupdOppDealHubSizeData upd ON t.id = upd.owner_id AND t.type_id = upd.type_id  
+								SET ",@updOppActive," where t.lvl=2"
+							);
+		PREPARE updSF FROM @dynQry;
+		EXECUTE updSF;       
+        
+     
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        DROP TEMPORARY TABLE IF EXISTS datasCopy;
+		CREATE TEMPORARY TABLE datasCopy
+		SELECT * FROM datas;
+        
+       
+        
+
+		SET @dynQry = CONCAT("UPDATE datas t
+							SET ",@totalAssignedSum," WHERE id > 0"
+						);
+	
+		PREPARE updateTotals FROM @dynQry;
+		EXECUTE updateTotals;
+        
+        SET @dynQry = CONCAT("UPDATE datas t
+							SET ",@totalActiveSum," WHERE id > 0"
+						);
+	
+		PREPARE updateTotals FROM @dynQry;
+		EXECUTE updateTotals;
+        
+         SET @dynQry = CONCAT("UPDATE datas t
+							SET ",@totalWonSum," WHERE id > 0"
+						);
+	
+		PREPARE updateTotals FROM @dynQry;
+		EXECUTE updateTotals;
+        
+         SET @dynQry = CONCAT("UPDATE datas t
+							SET ",@totalLostSum," WHERE id > 0"
+						);
+	
+		PREPARE updateTotals FROM @dynQry;
+		EXECUTE updateTotals;
+          
+       
+DROP TEMPORARY TABLE IF EXISTS datasCopy;
+    CREATE TEMPORARY TABLE datasCopy
+    SELECT * FROM datas;
+
+  SET @dynQry = CONCAT("INSERT INTO datas(id, name,type_id,owner_name_copy,lvl",@dynCols,")
+								SELECT 0, 'Summary', '', '',0", @dynColSum,"
+								FROM datasCopy
+								WHERE id > 0 AND lvl = 1
+							");
+                            
+		PREPARE lvl1 FROM @dynQry;
+		EXECUTE lvl1;
+        
+        SET @dynQry = CONCAT("INSERT INTO datas(id, name,type_id,owner_name_copy,lvl",@dynCols,")
+								SELECT 0,l.lkup_name, l.id, 'Summary',0", @dynColSum,"
+								from datasCopy d
+								join lkup_types l on d.type_id=l.id
+								WHERE d.id > 0 AND lvl = 2
+                                group by l.id order by l.sort_order
+							");
+		PREPARE lvl1 FROM @dynQry;
+		EXECUTE lvl1;
+        
+        
+         DROP TEMPORARY TABLE IF EXISTS updOppDealHubSizeDataSummary;
+		SET @dynQry = CONCAT("CREATE TEMPORARY TABLE updOppDealHubSizeDataSummary
+									SELECT owner_id, owner_name,salesforce_opp_id,type_id", @actamtSumQry,"", @wonamtSumQry,"", @lostamtSumQry,"
+									FROM(
+										SELECT 0 as owner_id, '' as owner_name,'' as salesforce_opp_id,type_id", @actamtCaseQry,"", @wonamtCaseQry,"", @lostamtCaseQry,"
+										FROM opportunitySummaryAverageDealSize 
+											
+									) a
+									GROUP BY owner_id
+							");
+		PREPARE updOppDealHubSizeData FROM @dynQry;
+		EXECUTE updOppDealHubSizeData;
+		SET @dynQry = CONCAT("UPDATE datas t
+									JOIN updOppDealHubSizeDataSummary upd ON t.id = upd.owner_id AND t.type_id = upd.type_id  
+								SET ",@updOppAmt," where t.lvl=0"
+							);
+		PREPARE updSF FROM @dynQry;
+		EXECUTE updSF;  
+        
+        
+                DROP TEMPORARY TABLE IF EXISTS ActiveupdOppDealHubSizeDataSummary;
+		SET @dynQry = CONCAT("CREATE TEMPORARY TABLE ActiveupdOppDealHubSizeDataSummary
+									SELECT  owner_id, owner_name, salesforce_opp_id,type_id", @activeCountSumQrySummary,"
+									FROM(
+										SELECT 0 as owner_id, '' as owner_name,'' as salesforce_opp_id,type_id", @activeCountCaseQrySummary,"
+										FROM opportunityActiveSummaryAverageDealSize 
+											
+									) a
+									GROUP BY owner_id
+							");
+		PREPARE ActiveupdOppDealHubSizeDataSummary FROM @dynQry;
+		EXECUTE ActiveupdOppDealHubSizeDataSummary;
+		SET @dynQry = CONCAT("UPDATE datas t
+									JOIN ActiveupdOppDealHubSizeDataSummary upd ON t.id = upd.owner_id AND t.type_id = upd.type_id  
+								SET ",@updOppActive," where t.lvl=0"
+							);
+		PREPARE updSF FROM @dynQry;
+		EXECUTE updSF; 
+        
+                      SET @dynQry = CONCAT("UPDATE datas t
+							SET ",@totalActiveSum," WHERE id = 0 and type_id =1471"
+						);
+		PREPARE updateTotals FROM @dynQry;
+		EXECUTE updateTotals;
+        
+         SET @dynQry = CONCAT("UPDATE datas t
+							SET ",@totalWonSum," WHERE id = 0 and type_id =1471"
+						);
+	
+		PREPARE updateTotals FROM @dynQry;
+		EXECUTE updateTotals;
+        
+         SET @dynQry = CONCAT("UPDATE datas t
+							SET ",@totalLostSum," WHERE id = 0 and type_id =1471"
+						);
+	
+		PREPARE updateTotals FROM @dynQry;
+		EXECUTE updateTotals;
+           
+           SET @dropCols = CONCAT(@dropCols, "");
+        
+         SET @dynQry = CONCAT("ALTER TABLE datas ",@dropCols);
+
+		PREPARE drpCols FROM @dynQry;
+		EXECUTE drpCols;
+
+SELECT * FROM datas ORDER BY FIELD(id,-3,-2,-1,0,id),owner_name_copy,type_id , lvl;
+
+END
