@@ -170,19 +170,19 @@ IF(StatusId ='-1') THEN
     owner_name_copy VARCHAR(50),
     lvl INT
     );
-    
+    ALTER TABLE datas ADD COLUMN actual_revenue DECIMAL(10,2) DEFAULT 0;
      DROP TEMPORARY TABLE IF EXISTS tmp_dates;
     CREATE TEMPORARY TABLE tmp_dates(
 		quarterStDt  DATE,
         quarterEndDt 	DATE
     );
-    
+    ALTER TABLE tmp_dates ADD COLUMN actual_revenue DECIMAL(10,2) DEFAULT 0;
 
 	SET @dynQry = CONCAT("ALTER TABLE datas ");
    
-    SET @insrtHdr2 = CONCAT(" -2,'Owner^&2^&1','Type^&2^&1','Owner Copy^&2^&1',-2");
+    SET @insrtHdr2 = CONCAT(" -2,'Owner^&2^&1','Type^&2^&1','Owner Copy^&2^&1',-2,0");
 	
-	SET @insrtHdr1 = " -1, NULL, NULL,NULL,-1";
+	SET @insrtHdr1 = " -1, NULL, NULL, NULL, -1, 0";
 	
   
 
@@ -656,6 +656,7 @@ GROUP BY
     dhub_id;
 
  DROP TEMPORARY TABLE IF EXISTS ActivecombinedHrsWithOwner;
+ ALTER TABLE ActivecombinedHrs ADD COLUMN actual_revenue DECIMAL(10,2) DEFAULT 0;
 SET @dynQry = CONCAT(" CREATE TEMPORARY TABLE ActivecombinedHrsWithOwner
  select dp.owner_id,concat(u.first_name,' ',u.last_name) as owner_name_copy,ch.salesforce_opp_id,ch.total_active,ch.total_active_actual_hrs,2 as lvl,ch.dhub_id from ActivecombinedHrs ch
 join dhub_particpants dp on dp.dhub_id = ch.dhub_id and dp.is_active=1
