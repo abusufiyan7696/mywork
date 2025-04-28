@@ -1,0 +1,596 @@
+CREATE DEFINER=`root`@`%` PROCEDURE `UpsertExeMRFResult`(
+	p_FromDt		DATE
+)
+BEGIN
+	DECLARE CurMonthDate	DATE; 
+	DECLARE FromDate		DATE; 
+	DECLARE ToDate 			DATE;
+	DECLARE v_LastDate		DATE;
+	DECLARE v_InsData		TEXT;
+    DECLARE totRcrds		INT;
+    DECLARE costFactor	    DECIMAL(5,2);
+    DECLARE SaltKey			TEXT DEFAULT 'AAAAB3NzaC1yc2EAAAABJQAAAIEAkwFrmz0JNpn8';
+	DECLARE error_message 	TEXT;
+    DECLARE exit_code 		INT;
+
+	DECLARE EXIT HANDLER FOR SQLEXCEPTION  
+    BEGIN  
+        -- Capture error details
+        GET DIAGNOSTICS CONDITION 1 exit_code = MYSQL_ERRNO, error_message = MESSAGE_TEXT;
+
+        -- Insert error into log table
+        INSERT INTO mrfexeclogs (month,status, message)  
+        VALUES (p_FromDt,'ERROR', CONCAT('Error ', exit_code, ': ', error_message));
+
+        -- Rollback transaction
+        ROLLBACK;
+    END;
+
+	SET CurMonthDate = FIRST_DAY(CURRENT_DATE);
+	SET FromDate = FIRST_DAY(p_FromDt);
+	SET ToDate = LAST_DAY(p_FromDt);
+	SET v_LastDate = LAST_DAY(p_FromDt - INTERVAL 3 MONTH);
+
+	SET SESSION TRANSACTION ISOLATION LEVEL READ UNCOMMITTED ;
+	start transaction;
+  
+    SELECT val/100 INTO @costFactor FROM lkup_types WHERE lkup_type_group_id = 152 AND lkup_name = 'UACostFactor';
+
+    DROP TEMPORARY TABLE IF EXISTS resources_cost_data_tmp;
+	CREATE TEMPORARY TABLE resources_cost_data_tmp(index(month),index(role_type_id),index(user_id))		 
+    SELECT r.user_id,r.month,r.role_type_id 
+	FROM resources_cost_data r 
+	JOIN( SELECT MAX(month) month ,user_id,role_type_id FROM resources_cost_data where month <= FromDate GROUP BY user_id ) r2 ON r2.month = r.month AND r2.user_id = r.user_id;
+    
+    DROP TEMPORARY TABLE IF EXISTS datas;
+    CREATE TEMPORARY TABLE datas (
+		deptId INT UNSIGNED NOT NULL DEFAULT 0,
+		dept VARCHAR(100) NOT NULL,
+		rid INT UNSIGNED NOT NULL DEFAULT 0,
+		uid INT UNSIGNED NOT NULL DEFAULT 0,
+        projectid INT UNSIGNED NOT NULL DEFAULT 0,
+		emp_full_name VARCHAR(201) NOT NULL,
+		resTyp VARCHAR(10) NOT NULL,
+		day_hours FLOAT(10,4) NOT NULL DEFAULT 8.0000,
+		days INT DEFAULT 0,
+		netDays INT,
+		gC BIGINT,
+		nC DOUBLE(22,4),
+		rstart_date DATE NOT NULL,
+		rend_date DATE,
+		orgCost  FLOAT(10,4) NOT NULL DEFAULT 0.0000,
+		orgRev INT DEFAULT 0,
+		allocs INT DEFAULT 0,
+		billAlloc INT DEFAULT 0,
+		Revenue INT DEFAULT 0,
+		billAss INT DEFAULT 0,
+		AssRevenue INT DEFAULT 0,
+		billAct INT DEFAULT 0,
+		ActRevenue INT DEFAULT 0,
+		billAppr INT DEFAULT 0,
+		ApprHrs INT DEFAULT 0,
+		ApprRevenue INT DEFAULT 0,
+		RecRevenue INT DEFAULT 0,
+		AvgCost INT DEFAULT 0,
+		NAvgCost INT DEFAULT 0,
+		AcGM INT DEFAULT 0,
+		NAcGM INT DEFAULT 0,
+		TrueCost INT DEFAULT 0,
+		TcGM INT DEFAULT 0,
+		RRCost INT DEFAULT 0,
+		NRRCost INT DEFAULT 0,
+		BenchCost INT DEFAULT 0,
+		RRGM INT DEFAULT 0,
+		NRRGM INT DEFAULT 0,
+		empStatus VARCHAR(12) NOT NULL,
+		entityid INT, 
+		entity_name VARCHAR(200) DEFAULT '',
+		deptCompId BIGINT NOT NULL DEFAULT 0,
+		comp_name VARCHAR(100) NOT NULL,
+		region INT,
+		revType VARCHAR(16) NOT NULL,
+		resbillType VARCHAR(8) NOT NULL,
+		rtype INT NOT NULL DEFAULT 0,
+		INDEX(uid),
+		INDEX(rid),
+        INDEX(projectid)
+	);
+
+	INSERT INTO datas
+	SELECT 
+		d.id deptId,
+		d.name dept,
+		r.id rid,
+		u.id uid,
+        pr.project_id AS projectid,
+		TRIM(CONCAT(u.first_name, ' ', u.last_name)) AS emp_full_name,
+		CASE WHEN u.typ_user_cat_id in (12,18,827,1474) THEN 'Contractor' ELSE 'FTE' END resTyp,
+		r.day_hours,
+		TOTAL_WEEKDAYS_WITH_HOLIDAYS(IF(FromDate < r.start_date,r.start_date,FromDate),IF(ToDate > r.end_date,r.end_date,ToDate), r.holiday_calendar_id) days,
+		TOTAL_WEEKDAYS_EXCL_HLDYS_AND_LVS_TIMEOFFS(IF(FromDate < r.start_date,r.start_date,FromDate),IF(ToDate > r.end_date,r.end_date,ToDate), r.id) netDays,	
+		TOTAL_WEEKDAYS_EXCL_HLDYS(IF(FromDate < r.start_date,r.start_date,FromDate),IF(ToDate > r.end_date,r.end_date,ToDate), r.id) * 8 gC,
+		TOTAL_WEEKDAYS_EXCL_HLDYS_AND_LVS_TIMEOFFS(IF(FromDate < r.start_date,r.start_date,FromDate),IF(ToDate > r.end_date,r.end_date,ToDate), r.id)*r.day_hours nC,
+		r.start_date rstart_date,
+        r.end_date rend_date,
+		IFNULL(IFNULL(src.cost,rc.cost),IF(u.typ_user_cat_id IN (12,18,827,1474),uad.cost_rate,0)) AS orgCost,
+		rc.revenue orgRev,
+		00000000.00 allocs,
+		00000000.00 billAlloc,00000000.00 Revenue,
+		00000000.00 billAss,00000000.00 AssRevenue,
+		00000000.00 billAct,00000000.00 ActRevenue,
+		00000000.00 billAppr, 00000000.00 ApprHrs,00000000.00 ApprRevenue,
+		00000000.00 RecRevenue,
+		00000000.00 AvgCost,00000000.00 NAvgCost,00000000.00 AcGM,00000000.00 NAcGM,
+		00000000.00 TrueCost,00000000.00 TcGM,
+		00000000.00 RRCost,
+		00000000.00 NRRCost,
+		00000000.00 BenchCost,
+		00000000.00 RRGM,
+		00000000.00 NRRGM,
+		CONCAT(CASE WHEN u.typ_user_cat_id in (12,18,827,1474) THEN 'subk' ELSE 'fte' END,
+				CASE WHEN u.is_active = 0 THEN 'Inactive' 
+				ELSE IF(r.resigned_date IS NOT NULL AND CURDATE() BETWEEN r.resigned_date AND IFNULL(r.sys_end_date,ADDDATE(r.resigned_date,INTERVAL 3 MONTH)),'Notice','Active')
+				END) AS empStatus,
+		e.entity_id AS entityid, 
+		e.entity_name AS entity_name,
+        d.department_groups_competency_id as deptCompId,
+		dc.name as comp_name,
+        co.geo_location_id as region,
+		CASE WHEN d.is_billable =1 AND d.is_revenue = 1 THEN 'Revenue Units' ELSE  'NonRevenue Units' END as revType,
+		CASE WHEN r.day_hours=8 THEN 'Billable' ELSE IF (r.day_hours>0  and r.day_hours<8, 'Partial' , 'OverHead') END AS resbillType,
+		CASE WHEN u.typ_user_cat_id not in (12,18,827,1474) THEN 0 ELSE 1 END as rtype 
+	FROM users u
+	INNER JOIN employee_entity_mapping em ON em.emp_id = u.id
+	INNER JOIN entity e ON e.entity_id = em.entity_id
+	INNER JOIN resources r ON r.user_id = u.id 
+	INNER JOIN departments d ON r.department_id = d.id 
+	INNER JOIN department_groups_competency dc ON d.department_groups_competency_id = dc.id 
+	INNER JOIN locations lc ON r.location_id = lc.id and lc.country_id in (1,2,3,5,6,7,8)
+	INNER JOIN country co ON co.id = lc.country_id 
+	LEFT JOIN job_titles jt ON r.job_title_id = jt.id
+	LEFT JOIN role_costs rc ON rc.country_id = lc.country_id AND rc.department_id = r.department_id AND
+		rc.role_type_id = jt.role_type_id AND FromDate BETWEEN rc.start_date AND IFNULL(rc.end_date,FromDate)
+	LEFT JOIN resources_cost_data_tmp rcd ON r.employee_number = rcd.user_id 
+	LEFT JOIN salary_base_role_costs src ON src.country_id = lc.country_id AND src.department_id = r.department_id AND
+		src.role_type_id = rcd.role_type_id  AND FromDate BETWEEN src.start_date AND IFNULL(src.end_date,FromDate)
+	LEFT JOIN contractor_costs uad ON uad.user_id = u.id AND FromDate BETWEEN uad.start_date AND IFNULL(uad.end_date,FromDate)
+    LEFT JOIN project_role_bookings prb ON prb.resource_id = r.id AND prb.from_dt <= ToDate AND prb.to_dt >= FromDate
+    LEFT JOIN project_roles pr ON pr.id = prb.project_role_id
+	WHERE 
+		CASE
+			WHEN u.is_active = 1 THEN r.start_date <= ToDate
+			ELSE r.start_date <= ToDate AND r.end_date >= FromDate
+		END
+		AND u.email_official NOT LIKE '%_PPM_TEMP'
+		AND u.id <> 1
+	GROUP BY pr.project_id, u.id  ORDER BY uid ASC;
+
+	DROP TEMPORARY TABLE IF EXISTS Details;
+	Create Temporary Table Details(
+		Id INT NOT NULL, 
+		projectid INT NOT NULL,
+		emp_full_name VARCHAR(201) NOT NULL, 
+		resTyp VARCHAR(10) NOT NULL, 
+		employee_number VARCHAR(20) NOT NULL, 
+		rstart_date DATE NOT NULL, 
+		rend_date  DATE, 
+		revType VARCHAR(16) NOT NULL, 
+		resbillType VARCHAR(8) NOT NULL, 
+		rtype INT NOT NULL DEFAULT 0, 
+		practice_id INT, 
+		entityid INT, 
+		entity_name VARCHAR(100) NOT NULL,
+		compid  INT, 
+		comp_name VARCHAR(100) NOT NULL,
+		region INT, 
+		empStatus VARCHAR(12) NOT NULL, 
+		day_hours FLOAT(10,4) NOT NULL DEFAULT 8.0000, 
+		days INT DEFAULT 0, 
+		netDays INT DEFAULT 0, 
+		gC BIGINT, 
+		nC DECIMAL(10,2), 
+		Cpercent INT DEFAULT 0,
+		allocs INT DEFAULT 0,
+		allocspercent INT DEFAULT 0,
+		billAlloc INT DEFAULT 0,
+		billAllocpercent INT DEFAULT 0,
+		billAss INT DEFAULT 0,
+		billAsspercent INT DEFAULT 0,
+		billAct INT DEFAULT 0,
+		billActpercent INT DEFAULT 0,
+		billAppr INT DEFAULT 0,
+		billApprpercent INT DEFAULT 0,
+		Revenue INT DEFAULT 0,
+		AssRevenue INT DEFAULT 0,
+		ActRevenue INT DEFAULT 0,
+		ApprRevenue INT DEFAULT 0,
+		RecRevenue INT DEFAULT 0,
+		AvgCost INT DEFAULT 0,
+		RRCost INT DEFAULT 0,
+		NAvgCost INT DEFAULT 0,
+		NRRCost INT DEFAULT 0,
+		BenchCost INT DEFAULT 0,
+		AcGM INT DEFAULT 0,
+		NAcGM INT DEFAULT 0,
+		RRGM INT DEFAULT 0,
+		NRRGM INT DEFAULT 0
+	);
+
+    SELECT COUNT(*) INTO totRcrds FROM datas;
+    
+    IF totRcrds > 0 THEN
+    
+		DROP TEMPORARY TABLE IF EXISTS tmp_currencies;
+		CREATE TEMPORARY TABLE tmp_currencies(INDEX(currency_type_id))
+		SELECT c.currency_type_id,c.value_in_usd 
+		FROM currency c 
+		JOIN(SELECT MAX(currency_date) date ,currency_type_id FROM currency GROUP BY currency_type_id) c2 ON c2.date = c.currency_date AND c2.currency_type_id = c.currency_type_id;
+		
+		DROP TEMPORARY TABLE IF EXISTS tmp_currencies2;
+		CREATE TEMPORARY TABLE tmp_currencies2
+		SELECT * FROM tmp_currencies;
+		ALTER TABLE tmp_currencies2 ADD INDEX(currency_type_id);		
+
+		DROP TEMPORARY TABLE IF EXISTS project_role_bookings_tmp;
+		CREATE TEMPORARY TABLE project_role_bookings_tmp (INDEX(project_role_id),INDEX(resource_id),INDEX(project_id),INDEX(project_role_id,resource_id))
+		SELECT 
+			prb.id
+			,d.projectid AS project_id
+			,project_role_id
+			,resource_id
+			,from_dt,to_dt
+			,daily_hours
+			,hourly_rate
+			,allocation_type_id
+			,status_id
+		FROM project_role_bookings prb
+		JOIN datas d ON d.rid = prb.resource_id
+		INNER JOIN project_roles pr ON pr.id = prb.project_role_id AND pr.project_id = d.projectid
+		WHERE prb.status_id = 475 AND prb.from_dt <= ToDate AND prb.to_dt >= FromDate;
+
+		DROP TEMPORARY TABLE IF EXISTS project_role_bookings_tmp2;
+		CREATE TEMPORARY TABLE project_role_bookings_tmp2
+		SELECT * FROM project_role_bookings_tmp;
+		
+		ALTER TABLE project_role_bookings_tmp2 ADD INDEX(project_role_id), ADD INDEX(resource_id), ADD INDEX(project_id);
+
+		DROP TEMPORARY TABLE IF EXISTS tmp_week_days;
+		CREATE TEMPORARY TABLE tmp_week_days
+		SELECT date FROM 
+			(SELECT ADDDATE(FromDate, t4.i*10000 + t3.i*1000 + t2.i*100 + t1.i*10 + t0.i) date FROM
+			 (SELECT 0 i UNION SELECT 1 UNION SELECT 2 UNION SELECT 3 UNION SELECT 4 UNION SELECT 5 UNION SELECT 6 UNION SELECT 7 UNION SELECT 8 UNION SELECT 9) t0,
+			 (SELECT 0 i UNION SELECT 1 UNION SELECT 2 UNION SELECT 3 UNION SELECT 4 UNION SELECT 5 UNION SELECT 6 UNION SELECT 7 UNION SELECT 8 UNION SELECT 9) t1,
+			 (SELECT 0 i UNION SELECT 1 UNION SELECT 2 UNION SELECT 3 UNION SELECT 4 UNION SELECT 5 UNION SELECT 6 UNION SELECT 7 UNION SELECT 8 UNION SELECT 9) t2,
+			 (SELECT 0 i UNION SELECT 1 UNION SELECT 2 UNION SELECT 3 UNION SELECT 4 UNION SELECT 5 UNION SELECT 6 UNION SELECT 7 UNION SELECT 8 UNION SELECT 9) t3,
+			 (SELECT 0 i UNION SELECT 1 UNION SELECT 2 UNION SELECT 3 UNION SELECT 4 UNION SELECT 5 UNION SELECT 6 UNION SELECT 7 UNION SELECT 8 UNION SELECT 9) t4) dates
+		WHERE date BETWEEN FromDate AND ToDate AND WEEKDAY(date) < 5;
+
+		DROP TEMPORARY TABLE IF EXISTS alloc_data;
+		CREATE TEMPORARY TABLE alloc_data (INDEX(rid),INDEX(project_id),INDEX(rid,project_id)) AS
+		SELECT
+			d.rid
+			,d.projectid AS project_id
+			,prb.from_dt,prb.to_dt
+			,prb.allocation_type_id
+			,prb.daily_hours allocHrs
+			,ROUND(prb.hourly_rate*IF(p.source = 'Projector',1,cu.value_in_usd),2) hourly_rate,
+            cp.practice_group_id AS practice_id
+		FROM datas d
+		JOIN resources r ON r.id = d.rid
+		JOIN users u ON u.id = r.user_id
+		JOIN project_role_bookings_tmp prb ON prb.resource_id = d.rid AND d.projectid = prb.project_id AND prb.status_id = 475 AND prb.from_dt <= ToDate AND prb.to_dt >= FromDate
+		JOIN tmp_week_days dt ON dt.date BETWEEN prb.from_dt AND prb.to_dt AND dt.date BETWEEN r.start_date AND IFNULL(r.end_date, dt.date)
+		JOIN project_roles pr ON pr.id = prb.project_role_id 
+		JOIN projects p ON prb.project_id = p.id AND d.projectid = p.id
+		JOIN customers c on c.id = p.customer_id
+        JOIN customer_practice_mapping cp ON cp.customer_id = c.id
+		JOIN tmp_currencies cu ON cu.currency_type_id = p.currency_id
+		LEFT JOIN holidays h ON r.holiday_calendar_id = h.holiday_calendar_id AND dt.date = h.holiday_dt
+		LEFT JOIN resource_leaves rl ON r.id = rl.resource_id AND rl.date = dt.date
+		WHERE h.id IS NULL AND (rl.resource_id IS NULL OR rl.leave_hours < 8);
+
+		SET sql_safe_updates = 0;
+		Alter table datas ADD column practice_id INT;
+        
+		UPDATE datas d
+		JOIN(
+			SELECT
+				rid,
+				project_id,
+				IFNULL(SUM(allocHrs),0) allocHrs,
+				IFNULL(SUM(IF(allocation_type_id = 187,allocHrs,0)),0) billAllocHrs,
+				IFNULL(SUM(IF(allocation_type_id = 187,allocHrs*hourly_rate,0)),0) revenue,
+                practice_id
+			FROM alloc_data
+			GROUP BY rid, project_id
+		)al ON d.rid = al.rid AND d.projectid = al.project_id
+		SET d.allocs = (al.allocHrs), d.billAlloc = (al.billAllocHrs), d.Revenue = ROUND(al.revenue),d.practice_id = al.practice_id;
+
+		DROP TABLE IF EXISTS ass_data;
+		CREATE TEMPORARY TABLE ass_data (INDEX(rid), INDEX(project_id), INDEX(rid,project_id))
+		SELECT rid, project_id, SUM(billAssHrs) billAssHrs, ROUND(SUM(assRev)) assRev 
+		FROM(
+			SELECT 
+				d.rid,
+				prb.project_id,
+				IF(LOCATE(pta.allocation_dt,h.holiday_dt) OR  LOCATE(pta.allocation_dt,rl.date),0,pta.allocation_hrs) billAssHrs, 
+				IF(LOCATE(pta.allocation_dt,h.holiday_dt) OR  LOCATE(pta.allocation_dt,rl.date),0,pta.allocation_hrs)*prb.hourly_rate*IF(p.source = 'Projector',1,c.value_in_usd) assRev
+			FROM project_task_allocations pta
+				INNER JOIN project_task_roles ptr ON pta.project_task_role_id = ptr.id
+				INNER JOIN project_tasks pt ON ptr.project_task_id = pt.id
+				INNER JOIN projects p ON p.id = pt.project_id
+				INNER JOIN customers cust ON cust.id = p.customer_id
+				INNER JOIN project_crgs crg on crg.project_id = p.id
+				INNER JOIN engagements eng ON eng.id = crg.engagement_id
+				INNER JOIN datas d ON ptr.resource_id = d.rid
+				INNER JOIN resources r ON r.id = d.rid
+				INNER JOIN users u ON u.id = d.uid
+				INNER JOIN tmp_currencies c ON c.currency_type_id = p.currency_id
+				JOIN project_role_bookings_tmp prb ON prb.project_role_id = ptr.project_role_id AND prb.resource_id = d.rid AND prb.project_id = d.projectid AND prb.status_id = 475 AND pta.allocation_dt BETWEEN prb.from_dt AND prb.to_dt
+				LEFT JOIN holidays h on h.holiday_calendar_id = r.holiday_calendar_id AND h.holiday_dt = pta.allocation_dt
+				LEFT JOIN resource_leaves rl ON rl.resource_id = r.id AND rl.date = pta.allocation_dt
+			WHERE pta.allocation_dt BETWEEN FromDate AND ToDate AND WEEKDAY(pta.allocation_dt) NOT IN (5,6) AND pta.allocation_dt BETWEEN r.start_date AND IFNULL(r.end_date, pta.allocation_dt) AND prb.allocation_type_id IN (187,808) AND h.id IS NULL AND (rl.resource_id IS NULL OR rl.leave_hours < 8)
+		)a GROUP BY project_id, rid;
+          
+		UPDATE datas d
+		JOIN ass_data ass ON ass.rid = d.rid AND ass.project_id = d.projectid
+		SET d.billAss = (ass.billAssHrs),d.AssRevenue = ROUND(ass.assRev);
+
+		DROP TEMPORARY TABLE IF EXISTS datas2;
+		CREATE TEMPORARY TABLE datas2
+		SELECT * FROM datas;
+		ALTER TABLE datas2 ADD INDEX(uid), ADD INDEX(rid), ADD INDEX(projectid);
+		
+		DROP TEMPORARY TABLE IF EXISTS datas3;
+		CREATE TEMPORARY TABLE datas3
+		SELECT * FROM datas;
+		ALTER TABLE datas3 ADD INDEX(uid), ADD INDEX(rid), ADD INDEX(projectid);
+		
+		DROP TEMPORARY TABLE IF EXISTS alloc_data2;
+		CREATE TEMPORARY TABLE alloc_data2 (INDEX(rid), INDEX(projectid), INDEX(rid,projectid)) AS
+		SELECT rid, projectid, SUM(entered_hours) ActHrs, SUM(billApprHrs) billApprHrs, SUM(ApprHrs) ApprHrs, SUM(IFNULL(ActRevenue,0)) ActRevenue,SUM(IFNULL(ApprRevenue,0)) ApprRevenue
+		FROM(
+			SELECT d.rid,d.projectid,t.id tid
+				,CASE WHEN prb.allocation_type_id IN (187,808)  THEN t.entered_hours ELSE 0 END entered_hours
+				,CASE WHEN t.typ_status_id = 173 AND prb.allocation_type_id IN (187,808)  THEN t.entered_hours ELSE 0 END AS billApprHrs
+				,CASE WHEN t.typ_status_id = 173 THEN t.entered_hours END AS ApprHrs
+				,CASE WHEN prb.allocation_type_id IN (187,808) THEN t.entered_hours*ROUND(IF(prb.id IS NULL ,d.orgRev,ROUND(prb.hourly_rate*IF(p.source = 'Projector',1,c.value_in_usd),2)),2) ELSE 0 END AS ActRevenue
+				,CASE WHEN t.typ_status_id = 173 AND prb.allocation_type_id IN (187,808) AND p.typ_contract_terms_cat_id NOT IN (25,28) THEN t.entered_hours*ROUND(IF(prb.id IS NULL ,d.orgRev,ROUND(prb.hourly_rate*IF(p.source = 'Projector',1,c.value_in_usd),2)),2) ELSE 0 END AS ApprRevenue
+			FROM datas d
+			JOIN timesheet t ON t.resource_id = d.rid AND t.timesheet_dt BETWEEN FromDate AND ToDate AND t.typ_status_id <> 172 
+			JOIN resources r ON r.id = t.resource_id
+			JOIN users u ON u.id = r.user_id
+			JOIN locations l ON l.id = r.location_id
+			JOIN projects p ON p.id = t.project_id 
+			INNER JOIN customers cust ON cust.id = p.customer_id
+			INNER JOIN project_crgs crg on crg.project_id = p.id
+			INNER JOIN engagements eng ON eng.id = crg.engagement_id
+			JOIN tmp_currencies c ON c.currency_type_id = p.currency_id
+			JOIN project_tasks pt ON pt.project_id = t.project_id AND pt.id = t.project_task_id
+			JOIN project_task_roles ptr ON ptr.resource_id = t.resource_id AND ptr.project_task_id = t.project_task_id AND t.timesheet_dt BETWEEN ptr.from_dt AND ptr.to_dt	
+			JOIN project_role_bookings_tmp prb ON ptr.project_role_id = prb.project_role_id AND ptr.resource_id = prb.resource_id	AND t.timesheet_dt BETWEEN prb.from_dt AND prb.to_dt	
+			LEFT JOIN job_titles jt ON jt.id = r.job_title_id
+			WHERE
+				t.project_id != 6078814
+			GROUP BY d.projectid,t.id
+									
+			UNION
+									
+			-- Projector projects actuals without allocs
+			SELECT d.rid,d.projectid,t.id tid
+				,CASE WHEN t.is_billable = 1 THEN t.entered_hours ELSE 0 END entered_hours
+				,CASE WHEN t.is_billable = 1 AND t.typ_status_id = 173 THEN t.entered_hours END AS BillApprHrs 
+				,CASE WHEN t.typ_status_id = 173 THEN t.entered_hours END AS ApprHrs
+				,CASE WHEN t.is_billable = 1 THEN t.revenue ELSE 0 END revenue 
+				,CASE WHEN t.typ_status_id = 173 AND t.is_billable = 1 AND p.typ_contract_terms_cat_id NOT IN (25,28) THEN t.revenue END  AS ApprRevenue
+			FROM
+				datas3 d
+				JOIN timesheet t ON t.resource_id = d.rid AND t.timesheet_dt BETWEEN FromDate AND ToDate AND t.typ_status_id <> 172  
+				JOIN resources r ON r.id = t.resource_id
+				JOIN users u ON u.id = r.user_id
+				JOIN locations l ON l.id = r.location_id
+				JOIN projects p ON p.id = t.project_id 
+				INNER JOIN customers cust ON cust.id = p.customer_id
+				INNER JOIN project_crgs crg on crg.project_id = p.id
+				INNER JOIN engagements eng ON eng.id = crg.engagement_id
+				LEFT JOIN project_tasks pt ON pt.project_id = t.project_id AND pt.id = t.project_task_id
+				LEFT JOIN project_task_roles ptr ON ptr.resource_id = t.resource_id AND ptr.project_task_id = t.project_task_id AND t.timesheet_dt BETWEEN ptr.from_dt AND ptr.to_dt	
+				LEFT JOIN project_role_bookings_tmp2 prb ON ptr.project_role_id = prb.project_role_id AND ptr.resource_id = prb.resource_id	AND t.timesheet_dt BETWEEN prb.from_dt AND prb.to_dt	
+				LEFT JOIN job_titles jt ON jt.id = r.job_title_id
+			WHERE
+				t.project_id != 6078814
+			GROUP BY d.projectid,t.id
+            HAVING COUNT(prb.id) = 0
+			
+			UNION
+			
+			SELECT d.rid,d.projectid,bts.id btsid
+				,NULL AS entered_hours
+				,NULL ApprHrs
+				,NULL billApprHrs
+				,NULL AS ActRevenue
+				,IF(bts.source = 'Projector',1,c.value_in_usd) * billing_amount ApprRevenue
+			FROM
+				datas2 d
+				JOIN users u ON u.id = d.uid
+				JOIN fixed_price_billing_dtls bts ON bts.resource_id = d.rid AND DATE_FORMAT(month,'%Y-%m') = DATE_FORMAT(FromDate,'%Y-%m')
+				JOIN projects p ON p.id = bts.project_id  
+				INNER JOIN customers cust ON cust.id = p.customer_id
+				INNER JOIN project_crgs crg on crg.project_id = p.id
+				INNER JOIN engagements eng ON eng.id = crg.engagement_id
+				JOIN tmp_currencies2 c ON c.currency_type_id = bts.currency_id
+		)a 
+		GROUP BY a.projectid, a.rid;
+
+		UPDATE datas d
+			JOIN alloc_data2 al ON al.rid = d.rid AND al.projectid = d.projectid
+		SET d.billAct = (al.ActHrs),
+			d.ActRevenue = ROUND(al.ActRevenue),
+			d.billAppr = (al.billApprHrs),
+			d.ApprHrs = (al.ApprHrs),
+			d.ApprRevenue = ROUND(al.ApprRevenue);
+
+		DROP TEMPORARY TABLE IF EXISTS rrData;
+		CREATE TEMPORARY TABLE rrData(INDEX(rid), INDEX(projectid), INDEX(rid, projectid))
+		SELECT d.rid, d.projectid, SUM(val) rr 
+		FROM datas d
+		JOIN facts_financials ff ON ff.user_id = d.uid AND kpi_id = 639 AND ff.month BETWEEN FromDate AND ToDate 
+		JOIN projects p ON p.id = ff.project_id 
+		JOIN customers c ON c.id = p.customer_id
+		AND ff.project_id IS NOT NULL
+		GROUP BY d.rid;
+
+        UPDATE datas d
+		JOIN rrData rr ON rr.rid = d.rid AND rr.projectid = d.projectid
+		SET d.RecRevenue = rr.rr;
+
+		IF(FromDate > CurMonthDate) THEN
+			DROP TEMPORARY TABLE IF EXISTS tmp_emp_recent_true_costs_tmp;
+			CREATE TEMPORARY TABLE tmp_emp_recent_true_costs_tmp
+			select decrypt_emp_number,max(start_date) start_date,max(end_date) end_date from user_sal_data  group by decrypt_emp_number;
+				
+			DROP TEMPORARY TABLE IF EXISTS tmp_emp_recent_true_costs;
+			CREATE TEMPORARY TABLE tmp_emp_recent_true_costs
+			SELECT us.decrypt_emp_number, us.start_date,us.end_date,us.avg_cost
+			FROM
+				user_sal_data us JOIN tmp_emp_recent_true_costs_tmp t on t.decrypt_emp_number = us.decrypt_emp_number AND us.start_date = t.start_date AND us.end_date = t.end_date
+			group by us.decrypt_emp_number;
+							
+			alter table tmp_emp_recent_true_costs add index idx_decrypt_emp_number (decrypt_emp_number);
+				
+			DROP TEMPORARY TABLE IF EXISTS sal_data;
+			CREATE TEMPORARY TABLE sal_data
+			SELECT 
+				us.decrypt_emp_number,
+				us.start_date,
+				us.end_date,
+				us.avg_cost
+			FROM
+				tmp_emp_recent_true_costs us
+			JOIN resources r on r.employee_number = us.decrypt_emp_number
+			JOIN users u on u.id = r.user_id
+			WHERE u.typ_user_cat_id IN (12,18,827,1474)
+			and u.is_active = 1
+			GROUP BY decrypt_emp_number;
+		ELSE
+			DROP TEMPORARY TABLE IF EXISTS sal_data;
+			CREATE TEMPORARY TABLE sal_data(INDEX(decrypt_emp_number))
+			SELECT * FROM user_sal_data WHERE FromDate >= start_date AND FromDate <= end_date;
+		END IF;
+
+		UPDATE datas SET AvgCost = ROUND(gC*orgCost*@costFactor),
+			BenchCost = ROUND(IF(billAlloc < nC,(nC- billAlloc)*orgCost*@costFactor,0)) WHERE resTyp = 'FTE';
+		
+		UPDATE datas SET NAvgCost = ROUND(gC*orgCost*@costFactor) WHERE resTyp = 'FTE' and day_hours !=0;
+		
+		UPDATE datas d
+		JOIN resources r ON r.id = d.rid
+		LEFT JOIN sal_data usd ON r.employee_number = usd.decrypt_emp_number 
+		SET AvgCost = ROUND(allocs * IFNULL(AES_DECRYPT(usd.avg_cost, SaltKey),0)),NAvgCost = ROUND(allocs * IFNULL(AES_DECRYPT(usd.avg_cost, SaltKey),0)),
+            BenchCost = ROUND((allocs- billAlloc)* IFNULL(AES_DECRYPT(usd.avg_cost, SaltKey),0))
+		WHERE resTyp = 'Contractor';
+        
+        UPDATE datas SET RRCost = ROUND(gC*orgCost*@costFactor) WHERE resTyp = 'FTE';
+
+		UPDATE datas SET NRRCost = ROUND(gC*orgCost*@costFactor) WHERE resTyp = 'FTE'  and day_hours !=0;
+		
+		UPDATE datas d
+		JOIN resources r ON r.id = d.rid
+		LEFT JOIN sal_data usd ON r.employee_number = usd.decrypt_emp_number 
+		SET RRCost = ROUND(ApprHrs * IFNULL(AES_DECRYPT(usd.avg_cost, SaltKey),0)),
+			NRRCost = ROUND(ApprHrs * IFNULL(AES_DECRYPT(usd.avg_cost, SaltKey),0))
+		WHERE resTyp = 'Contractor';
+
+        UPDATE datas SET gC = allocs ,nC = allocs WHERE resTyp = 'Contractor';
+
+        Update datas d
+        SET 
+            AcGM = IFNULL(ROUND((d.Revenue-d.AvgCost)*100/d.Revenue),0),
+            RRGM = IFNULL(ROUND((d.RecRevenue-d.RRCost)*100/d.RecRevenue),0),
+            NAcGM = IFNULL(ROUND((d.Revenue-d.NAvgCost)*100/d.Revenue),0),
+            NRRGM = IFNULL(ROUND((d.RecRevenue-d.NRRCost)*100/d.RecRevenue),0);
+
+		INSERT INTO Details (Id, projectid, emp_full_name, resTyp, employee_number, rstart_date, rend_date, revType, resbillType, rtype, practice_id, entityid, entity_name, compid , comp_name, region, empStatus, day_hours, days, netDays, gC, nC, allocs, billAlloc, billAss, billAct, billAppr, Revenue, AssRevenue, ActRevenue, ApprRevenue, RecRevenue, AvgCost, RRCost, NAvgCost, NRRCost, BenchCost, AcGM, NAcGM, RRGM, NRRGM) 
+		SELECT 
+			d.rid AS Id,
+			d.projectid,
+			d.emp_full_name,
+			d.resTyp,
+			r.employee_number, 
+			d.rstart_date,
+			d.rend_date,
+			d.revType, 
+			d.resbillType, 
+			d.rtype, 
+			d.practice_id, 
+			d.entityid, 
+			d.entity_name, 
+			d.deptCompId  AS compid, 
+			d.comp_name, 
+			d.region, 
+			d.empStatus, 
+			d.day_hours,
+			d.days,
+			d.netDays,
+			d.gC,
+			d.nC,
+			d.allocs,
+			d.billAlloc,
+			d.billAss,
+			d.billAct,
+			d.billAppr,
+			d.Revenue,
+			d.AssRevenue,
+			d.ActRevenue,
+			d.ApprRevenue,
+			d.RecRevenue,
+			d.AvgCost,
+			d.RRCost,
+			d.NAvgCost,
+			d.NRRCost,
+			d.BenchCost,
+			d.AcGM,
+			d.NAcGM,
+			d.RRGM,
+			d.NRRGM
+		FROM datas d 
+		INNER JOIN resources r on r.id = d.rid
+		ORDER BY d.emp_full_name ASC;
+
+		UPDATE Details 
+		SET 
+			Cpercent = CAST((nC * 100) / gC AS SIGNED),
+			allocspercent = CAST((allocs * 100) / nC AS SIGNED),
+			billAllocpercent = CAST((billAlloc * 100) / nC AS SIGNED),
+			billAsspercent = CAST((billAss * 100) / nC AS SIGNED),
+			billActpercent = CAST((billAct * 100) / nC AS SIGNED),
+			billApprpercent = CAST((billAppr * 100) / nC AS SIGNED);
+
+		UPDATE Details 
+		SET practice_id = 5 
+		WHERE practice_id IS NULL;
+
+    END IF;
+
+	SELECT COUNT(*) INTO v_InsData FROM mrfexecdata WHERE createdDate BETWEEN FromDate AND ToDate;
+
+	IF v_InsData > 0 THEN
+		DELETE FROM mrfexecdata WHERE createdDate BETWEEN FromDate AND ToDate;
+	END IF;
+
+	INSERT INTO mrfexecdata (Id, projectid, practice_id, entityid, compid, region, days, netDays, gC, nC, Cpercent, allocs, allocspercent, billAlloc, billAllocpercent, billAss, billAsspercent, billAct, billActpercent, billAppr, billApprpercent, Revenue, AssRevenue, ActRevenue, ApprRevenue, RecRevenue, AvgCost, RRCost, NAvgCost, NRRCost, BenchCost, AcGM, NAcGM, RRGM, NRRGM, createdDate)
+	SELECT Id, projectid, practice_id, entityid, compid, region, days, netDays, gC, nC, Cpercent, allocs, allocspercent, billAlloc, billAllocpercent, billAss, billAsspercent, billAct, billActpercent, billAppr, billApprpercent, Revenue, AssRevenue, ActRevenue, ApprRevenue, RecRevenue, AvgCost, RRCost, NAvgCost, NRRCost, BenchCost, AcGM, NAcGM, RRGM, NRRGM, p_FromDt AS createdDate
+	FROM Details;
+
+	DELETE FROM mrfexecdata WHERE createdDate <= v_LastDate;
+
+	-- If no error occurs, log success
+    INSERT INTO mrfexeclogs (month,status, message)  
+    VALUES (p_FromDt,'SUCCESS', 'Procedure executed successfully');
+    
+SELECT 1;
+
+	Commit; 
+	SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ ; 
+	SET sql_safe_updates = 1;
+END
