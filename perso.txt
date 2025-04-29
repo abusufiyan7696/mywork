@@ -168,22 +168,21 @@ IF(StatusId ='-1') THEN
     name VARCHAR(50),
     type_id VARCHAR(50),
     owner_name_copy VARCHAR(50),
-    lvl INT,
-    actual_revenue DECIMAL(10,2) DEFAULT 0
+    lvl INT
     );
-    
+    ALTER TABLE datas ADD COLUMN actual_revenue DECIMAL(10,2) DEFAULT 0;
      DROP TEMPORARY TABLE IF EXISTS tmp_dates;
     CREATE TEMPORARY TABLE tmp_dates(
 		quarterStDt  DATE,
         quarterEndDt 	DATE
     );
-    
+    ALTER TABLE tmp_dates ADD COLUMN actual_revenue DECIMAL(10,2) DEFAULT 0;
 
 	SET @dynQry = CONCAT("ALTER TABLE datas ");
    
-    SET @insrtHdr2 = CONCAT(" -2,'Owner^&2^&1','Type^&2^&1','Owner Copy^&2^&1',-2");
+    SET @insrtHdr2 = CONCAT(" -2,'Owner^&2^&1','Type^&2^&1','Owner Copy^&2^&1',-2,0");
 	
-	SET @insrtHdr1 = " -1, NULL, NULL,NULL,-1";
+	SET @insrtHdr1 = " -1, NULL, NULL, NULL, -1, 0";
 	
   
 
@@ -222,7 +221,7 @@ IF(StatusId ='-1') THEN
 
          
     SET @selCols = "";
-SET @dynSelCols = "id,name,type_id,owner_name_copy,lvl,actual_revenue,";
+SET @dynSelCols = "id,name,type_id,owner_name_copy,lvl,";
 	
 	
 
@@ -275,11 +274,7 @@ SET @dynSelCols = "id,name,type_id,owner_name_copy,lvl,actual_revenue,";
 			
 			SET @dynColSum = CONCAT(@dynColSum,", IFNULL(SUM(`", @quarterStDtCol, "_assigned`),0), IFNULL(SUM(`", @quarterStDtCol, "_won`),0), IFNULL(SUM(`", @quarterStDtCol, "_lost`),0), IFNULL(SUM(`", @quarterStDtCol, "_active`),0)");
 			SET @dynCols = CONCAT(@dynCols,", `", @quarterStDtCol, "_assigned`, `", @quarterStDtCol, "_won`, `", @quarterStDtCol, "_lost`, `", @quarterStDtCol, "_active`");
-	SET @actamtCaseQry = CONCAT(@actamtCaseQry, ", CASE 
-    WHEN prb.allocation_type_id IN (187,808) THEN t.entered_hours * ROUND(
-        IF(prb.id IS NULL, d.orgRev, ROUND(prb.hourly_rate * IF(p.source = 'Projector', 1, c.value_in_usd), 2)), 2)
-    ELSE 0 
-END AS actual_revenue");
+	SET @actamtCaseQry = CONCAT(@actamtCaseQry,",CASE WHEN QuarterCol = '", @quarterStDt, "' THEN active ELSE 0 END AS `", @quarterStDtCol,"_active`");
 	SET @actamtSumQry = CONCAT(@actamtSumQry,",ROUND(IFNULL(SUM(`", @quarterStDtCol,"_active`),0)) AS `", @quarterStDtCol,"_active`");
 		SET @wonamtCaseQry = CONCAT(@wonamtCaseQry,",CASE WHEN QuarterCol = '", @quarterStDt, "' THEN won ELSE 0 END AS `", @quarterStDtCol,"_won`");
 	SET @wonamtSumQry = CONCAT(@wonamtSumQry,",ROUND(IFNULL(SUM(`", @quarterStDtCol,"_won`),0)) AS `", @quarterStDtCol,"_won`");
@@ -331,7 +326,7 @@ SET @activeCountCaseQrySummary = CONCAT(@activeCountCaseQrySummary,",CASE WHEN Q
    SET @dynQry = CONCAT(@dynQry," ADD COLUMN total_assigned VARCHAR(152) DEFAULT 0,ADD COLUMN total_won VARCHAR(152) DEFAULT 0,ADD COLUMN total_lost VARCHAR(152) DEFAULT 0,ADD COLUMN total_active VARCHAR(152) DEFAULT 0");
 	SET @dynSelCols = CONCAT(@dynSelCols,"total_assigned,total_won,total_lost,total_active");
 	SET @SelCols = CONCAT(@SelCols,"total_assigned,total_won,total_lost,total_active");
-  SET @dynColSum = CONCAT(@dynColSum, ", IFNULL(SUM(`actual_revenue`),0) AS `total_actual_revenue`");
+  
     SET @insrtHdr2 = CONCAT(@insrtHdr2,",'Total^&1^&",colspan,"^&Total' ,NULL,NULL,NULL");
    
     SET @insrtHdr1 = CONCAT(@insrtHdr1,", 'Assigned','Won','Lost','Active'");
@@ -371,45 +366,25 @@ SET @updAssigned = CASE WHEN SUBSTRING(@updAssigned, -2) = ', ' THEN SUBSTRING(@
     PREPARE addHdrs	FROM @dynQry;
     EXECUTE addHdrs;
     
-SET @dynQry = CONCAT("INSERT INTO datas(id, name, type_id, owner_name_copy, lvl, actual_revenue)
-    SELECT owner_id AS id,
-           CONCAT(u.first_name, ' ', u.last_name) AS name,
-           '' AS type_id,
-           CONCAT(u.first_name, ' ', u.last_name) AS owner_name_copy,
-           1 AS lvl,
-           CASE 
-               WHEN prb.allocation_type_id IN (187,808) THEN t.entered_hours * ROUND(
-                   IF(prb.id IS NULL, d.orgRev, ROUND(prb.hourly_rate * IF(p.source = 'Projector', 1, c.value_in_usd), 2)), 2)
-               ELSE 0 
-           END AS actual_revenue
-    FROM dhub_particpants dp
-    JOIN dhub_details dh ON dp.dhub_id = dh.id
-    JOIN salesforce_opportunities sf ON dh.opportunity_id = sf.salesforce_opp_id
-    JOIN resources r ON dp.owner_id = r.id
-    JOIN users u ON r.user_id = u.id
-    LEFT JOIN customers cust ON cust.id = sf.customer_id
-    ", @joinCondition, "
-    WHERE dp.role_id = 1447 
-      AND dp.is_active = 1 
-      AND dh.is_active = 1
-      AND CASE WHEN '", CountryIds, "' != '-1' THEN sf.country_id IN (", CountryIds, ") ELSE 1=1 END ", @prb, "
-      AND CASE WHEN '", AccountIds, "' <> '-1' THEN FIND_IN_SET(sf.account_id, '", AccountIds, "') ELSE 1=1 END
-      AND CASE WHEN (", unAssignedDiv, " > 0 AND '", DivisionId, "' != -1) THEN 
-                   (FIND_IN_SET(r.sf_owner_divisin_id, '", DivisionId, "') OR (r.sf_owner_divisin_id IS NULL OR r.sf_owner_divisin_id = 0)) 
-               WHEN (", unAssignedDiv, " = 0 AND '", DivisionId, "' != -1) THEN 
-                   FIND_IN_SET(r.sf_owner_divisin_id, '", DivisionId, "')  
-               ELSE 1=1 END
-      AND CASE WHEN ('", contractId, "' != '-1' AND !LOCATE('999', '", contractId, "')) THEN 
-                   FIND_IN_SET(sf.service_type, TRIM('", contractId, "')) 
-               WHEN '", contractId, "' != '-1' AND LOCATE('999', '", contractId, "') THEN  
-                   (FIND_IN_SET(sf.service_type, TRIM('", contractId, "')) OR sf.service_type IS NULL) 
-               ELSE 1=1 END
-      AND CASE WHEN ('", AccOwnId, "' != '-1' AND !LOCATE('999', '", AccOwnId, "')) THEN 
-                   FIND_IN_SET(cust.account_owner_id, TRIM('", AccOwnId, "')) 
-               WHEN '", AccOwnId, "' != '-1' AND LOCATE('999', '", AccOwnId, "') THEN  
-                   (FIND_IN_SET(cust.account_owner_id, TRIM('", AccOwnId, "')) OR cust.account_owner_id IS NULL) 
-               ELSE 1=1 END
-    GROUP BY owner_id");
+SET @dynQry = CONCAT("INSERT INTO datas(id,name,type_id,owner_name_copy,lvl)
+    select owner_id as id,concat(u.first_name,' ',u.last_name) as name,'' as type_id,concat(u.first_name,' ',u.last_name) as owner_name_copy,
+    1 as lvl from dhub_particpants dp
+join dhub_details dh on dp.dhub_id = dh.id
+join salesforce_opportunities sf ON dh.opportunity_id=sf.salesforce_opp_id
+join resources r on dp.owner_id = r.id
+join users u on r.user_id = u.id
+LEFT JOIN customers cust ON cust.id = sf.customer_id
+",@joinCondition,"
+where dp.role_id=1447 and dp.is_active=1 and dh.is_active=1 
+AND CASE WHEN '",CountryIds,"' != '-1' THEN  sf.country_id IN (",CountryIds,") ELSE 1=1 END ",@prb," 
+AND CASE WHEN '",AccountIds,"' <> '-1'  THEN FIND_IN_SET(sf.account_id,'",AccountIds,"')  ELSE 1=1 END 
+AND CASE WHEN (",unAssignedDiv," > 0 AND '",DivisionId,"'  != -1) THEN (FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"') OR (r.sf_owner_divisin_id IS NULL OR r.sf_owner_divisin_id = 0)) 
+WHEN  (",unAssignedDiv," = 0 AND '",DivisionId,"'  != -1) THEN    FIND_IN_SET(r.sf_owner_divisin_id,'",DivisionId,"')  ELSE 1=1 END
+ AND CASE WHEN('",contractId,"' != '-1' AND !LOCATE('999','",contractId,"')) THEN FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) 
+WHEN '",contractId,"' != '-1' AND LOCATE('999','",contractId,"') THEN  (FIND_IN_SET(sf.service_type, TRIM('",contractId,"')) OR sf.service_type IS NULL) ELSE 1=1 END
+AND CASE WHEN('",AccOwnId,"' != '-1' AND !LOCATE('999','",AccOwnId,"')) THEN FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) 
+WHEN '",AccOwnId,"' != '-1' AND LOCATE('999','",AccOwnId,"') THEN  (FIND_IN_SET(cust.account_owner_id, TRIM('",AccOwnId,"')) OR cust.account_owner_id IS NULL) ELSE 1=1 END
+group by owner_id ");
 PREPARE STMT FROM @dynQry;
 		EXECUTE STMT;  
         
@@ -681,6 +656,7 @@ GROUP BY
     dhub_id;
 
  DROP TEMPORARY TABLE IF EXISTS ActivecombinedHrsWithOwner;
+ ALTER TABLE ActivecombinedHrs ADD COLUMN actual_revenue DECIMAL(10,2) DEFAULT 0;
 SET @dynQry = CONCAT(" CREATE TEMPORARY TABLE ActivecombinedHrsWithOwner
  select dp.owner_id,concat(u.first_name,' ',u.last_name) as owner_name_copy,ch.salesforce_opp_id,ch.total_active,ch.total_active_actual_hrs,2 as lvl,ch.dhub_id from ActivecombinedHrs ch
 join dhub_particpants dp on dp.dhub_id = ch.dhub_id and dp.is_active=1
@@ -702,6 +678,31 @@ WHEN '",AccOwnId,"' != '-1' AND LOCATE('999','",AccOwnId,"') THEN  (FIND_IN_SET(
   ");  
 PREPARE STMT FROM @dynQry;
 		EXECUTE STMT; 
+-- Update datas.actual_revenue using ActivecombinedHrsWithOwner
+UPDATE datas d
+JOIN ActivecombinedHrsWithOwner a ON d.id = a.owner_id
+JOIN salesforce_opportunities sf ON sf.salesforce_opp_id = a.salesforce_opp_id
+SET d.actual_revenue = ROUND(
+    (a.total_active_actual_hrs * IFNULL(sf.amount, 0)),
+2)
+WHERE d.id = a.owner_id;
+-- Step 1: Calculate total actual revenue into a variable
+SET @total_actual_revenue = (
+    SELECT SUM(actual_revenue)
+    FROM datas
+    WHERE id != 0 AND lvl != 0
+);
+
+-- Step 2: Update the summary row
+UPDATE datas
+SET actual_revenue = @total_actual_revenue
+WHERE id = 0 AND lvl = 0;
+
+
+
+
+
+
  DROP TEMPORARY TABLE IF EXISTS ActiveeffortHrs;
 CREATE TEMPORARY TABLE ActiveeffortHrs
 select co.owner_id,co.owner_name_copy as owner_name,co.salesforce_opp_id,1468 as type_id,co.total_active as active,
