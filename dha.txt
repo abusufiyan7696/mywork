@@ -1,0 +1,532 @@
+import React, { useState } from "react";
+import {
+  FaAngleDoubleLeft,
+  FaAngleDoubleRight,
+  FaAngleDown,
+  FaAngleLeft,
+  FaAngleRight,
+} from "react-icons/fa";
+import "./SalesOpportunity.scss";
+import useDynamicMaxHeight from "../PrimeReactTableComponent/useDynamicMaxHeight";
+
+const DhAnalyticsTable = (props) => {
+  const { data, formData, visible } = props;
+  const [searchQuery, setSearchQuery] = useState("");
+  const [itemsPerPage, setItemsPerPage] = useState(25);
+  const [currentPage, setCurrentPage] = useState(1);
+  const getActualRevenueValue = (item, header) => {
+    // Dummy logic for now; customize based on your data shape
+    if (item[`actual_revenue_${header}`]) {
+      return Number(item[`actual_revenue_${header}`]).toLocaleString("en-US");
+    }
+    return "-";
+  };
+  
+  const materialTableElement = document.getElementsByClassName(
+    "table table-bordered scrollit opportunityTable"
+  );
+  const maxHeight = useDynamicMaxHeight(materialTableElement);
+
+  if (!visible) {
+    document.documentElement.style.setProperty(
+      "--dynamic-value",
+      `${maxHeight - 230}px`
+    );
+  } else {
+    document.documentElement.style.setProperty(
+      "--dynamic-value",
+      `${maxHeight - 45}px`
+    );
+  }
+
+  const excludedColumns = ["id", "type_id", "lvl", "owner_name_copy", -2];
+
+  const columnsOrder = data.columns.split(",");
+  const opptKeys = columnsOrder.filter((key) => key in data.dhOppt[0]);
+  const headers = [
+    ...new Set(
+      ["name", ...opptKeys].filter((key) => !excludedColumns?.includes(key))
+    ),
+  ];
+
+  const toggleRow = (index) => {
+    setExpandedRows({
+      ...expandedRows,
+      [index]: !expandedRows[index],
+    });
+  };
+
+  const isRowExpanded = (index) => {
+    return expandedRows[index];
+  };
+  const rowData = headers.map((header) => data.dhOppt[0][header]);
+  const rowData1 = headers.map((header) => data.dhOppt[1][header]);
+
+  const modifiedRowData1 = rowData1.map((value) =>
+    value?.includes("^&") ? value?.split("^&")[0] : value
+  );
+  const nonNullHeaders = rowData.filter((header) => header !== null);
+  const nonNullHeaders1 = modifiedRowData1.filter((header) => header !== null);
+
+  const filteredData = data.dhOppt.slice(2).filter((item) => {
+    const searchableFields = headers.map((header) => item[header]).join(" ");
+    return searchableFields.toLowerCase().includes(searchQuery.toLowerCase());
+  });
+
+  const startIndex = (currentPage - 1) * itemsPerPage;
+  const endIndex = startIndex + itemsPerPage;
+
+  const totalPages = Math.ceil(
+    filteredData?.filter((item) => item.lvl === 1).length / itemsPerPage
+  );
+
+  const lvl0Items =
+    currentPage === 1 ? filteredData?.filter((item) => item?.lvl === 0) : [];
+
+  const currentPageItemsLvl1 = filteredData
+    ?.filter((item) => item.lvl === 1)
+    ?.slice(startIndex, endIndex);
+
+  const currentPageItems = currentPageItemsLvl1?.flatMap((lvl1Item) => {
+    const lvl3Items = filteredData?.filter((item) => {
+      return (
+        item.lvl === 2 && item.owner_name_copy === lvl1Item.owner_name_copy
+      );
+    });
+
+    return lvl3Items?.length > 0 ? [lvl1Item] : [lvl1Item];
+  });
+
+  const finalPageItems =
+    currentPage === 1 ? [...lvl0Items, ...currentPageItems] : currentPageItems;
+
+  const [expandedRows, setExpandedRows] = useState(() => {
+    const initialExpandedRows = {};
+    currentPageItems &&
+      finalPageItems.forEach((item, rowIndex) => {
+        if (item.lvl <= 1) {
+          initialExpandedRows[rowIndex] = true;
+        }
+      });
+    return initialExpandedRows;
+  });
+
+  const onPageChange = (page) => {
+    setCurrentPage(page);
+  };
+
+  const handleFirstPage = () => {
+    setCurrentPage(1);
+  };
+  const handleLastPage = () => {
+    setCurrentPage(totalPages);
+  };
+  const handleItemsPerPageChange = (e) => {
+    setItemsPerPage(parseInt(e.target.value));
+    setCurrentPage(1);
+  };
+  const handleSearchChange = (event) => {
+    setSearchQuery(event.target.value);
+    setCurrentPage(1);
+  };
+
+  let customercount = 0;
+
+  data?.dhOppt?.forEach((item) => {
+    if (item.lvl === 1) {
+      customercount++;
+    }
+  });
+  return (
+    <div>
+      <div className="dealHubHeading ">
+        <div className="p-1" style={{ float: "right" }}>
+          {" "}
+          <input
+            type="text"
+            placeholder="Search..."
+            value={searchQuery}
+            onChange={handleSearchChange}
+          />
+        </div>
+        <h2 style={{ float: "left" }}>
+          {formData?.viewBy == "ctype"
+            ? "Total Contract Types : "
+            : formData?.viewBy == "cust"
+            ? "Total Customers : "
+            : "Total DH Owners : "}
+          <span style={{ color: "black" }}>{customercount}</span>
+        </h2>
+        <h2 style={{ marginLeft: "16px" }}>DH Analytics</h2>
+      </div>
+      <div className="col-lg-12 col-md-12 col-sm-12 scrollit no-padding darkHeader toHead salesforce-oppertunity-DH-summary-table">
+        <table className="table table-bordered scrollit opportunityTable">
+          <thead className="stickyHeader">
+            <tr className="">
+              {nonNullHeaders.map((value, colIndex) => (
+                <th
+                  rowSpan={value?.includes("Owner") ? "2" : "1"}
+                  colSpan={
+                    value?.includes("_Q")
+                      ? parseInt(value?.split("^&")[2]) + 1
+                      : value?.includes("Total")
+                      ? parseInt(value?.split("^&")[2]) + 1
+                      : 1
+                  }
+                  key={colIndex}
+                  title={
+                    value?.includes("^&Q")
+                      ? value?.split("^&")[4]
+                      : value?.includes("Owner^&")
+                      ? "Owner"
+                      : value?.includes("Total^&")
+                      ? value.split("^&")[3]
+                      : value
+                  }
+                >
+                  {value?.includes("^&Q")
+                    ? value?.split("^&")[4]
+                    : value?.includes("Owner^&")
+                    ? "Owner"
+                    : value?.includes("Total^&")
+                    ? value.split("^&")[3]
+                    : value}
+                </th>
+              ))}
+            </tr>
+            <tr>
+              {nonNullHeaders1.map((header, colIndex) => (
+                <th key={colIndex} title={header}>
+                  {header}
+                </th>
+              ))}
+            </tr>
+          </thead>
+
+          <tbody>
+            {finalPageItems.map((item, rowIndex) => (
+              <React.Fragment key={rowIndex}>
+                {item.lvl <= 1 && (
+                  <tr>
+                    {headers.map((header, colIndex) => (
+                      <td
+                        key={colIndex}
+                        className={
+                          header.toLowerCase()?.includes("total") &&
+                          item.lvl == 1
+                            ? "totalStyle"
+                            : (header.toLowerCase()?.includes("_01_01") &&
+                                item.lvl == 1) ||
+                              (header.toLowerCase()?.includes("_07_01") &&
+                                item.lvl == 1)
+                            ? "evenColor"
+                            : (header.toLowerCase()?.includes("_10_01") &&
+                                item.lvl == 1) ||
+                              (header.toLowerCase()?.includes("_04_01") &&
+                                item.lvl == 1)
+                            ? "oddColor"
+                            : (header.toLowerCase()?.includes("_01_01") &&
+                                item.lvl == 0) ||
+                              (header.toLowerCase()?.includes("_07_01") &&
+                                item.lvl == 0)
+                            ? "innerevenColor"
+                            : (header.toLowerCase()?.includes("_10_01") &&
+                                item.lvl == 0) ||
+                              (header.toLowerCase()?.includes("_04_01") &&
+                                item.lvl == 0)
+                            ? "inneroddColor"
+                            : header.toLowerCase()?.includes("total") &&
+                              item.lvl == 0
+                            ? "innertotalStyle"
+                            : header == "name" && item.lvl == 1
+                            ? "lvl1Name"
+                            : item[header]
+                        }
+                        title={
+                          !isNaN(item[header])
+                            ? item[header]?.includes("^&2^&1")
+                              ? Number(
+                                  item[header]?.split("^&")[0]
+                                ).toLocaleString()
+                              : (Number(item[header]).toLocaleString("en-US") ==
+                                  "0" &&
+                                  item.lvl == 1) ||
+                                (item.lvl == 0 && item.name == "Summary")
+                              ? ""
+                              : (Number(item[header]).toLocaleString("en-US") ==
+                                  "0" &&
+                                  item.name == "Average Deal Size") ||
+                                (Number(item[header]).toLocaleString("en-US") ==
+                                  "0" &&
+                                  item.name == "Actual Hours") ||
+                                (Number(item[header]).toLocaleString("en-US") ==
+                                  "0" &&
+                                  item.name == "Estimated Hours") ||
+                                (Number(item[header]).toLocaleString("en-US") ==
+                                  "0" &&
+                                  item.name == "Average Elapsed Time")
+                              ? "-"
+                              : Number(item[header]).toLocaleString("en-US")
+                            : item[header]?.includes("^&2^&1")
+                            ? item[header]?.split("^&")[0]
+                            : item[header] == "0"
+                            ? ""
+                            : item[header]
+                        }
+                      >
+                        {colIndex === 0 && item.lvl === 1 && (
+                          <span onClick={() => toggleRow(rowIndex)}>
+                            {isRowExpanded(rowIndex) ? (
+                              <FaAngleDown
+                                title="Collapse"
+                                style={{ cursor: "pointer" }}
+                              />
+                            ) : (
+                              <FaAngleRight
+                                title="Expand"
+                                style={{ cursor: "pointer" }}
+                              />
+                            )}
+                          </span>
+                        )}
+                        {!isNaN(item[header])
+                          ? item[header]?.includes("^&2^&1")
+                            ? Number(
+                                item[header]?.split("^&")[0]
+                              ).toLocaleString()
+                            : (Number(item[header]).toLocaleString("en-US") ==
+                                "0" &&
+                                item.lvl == 1) ||
+                              (item.lvl == 0 && item.name == "Summary")
+                            ? ""
+                            : (Number(item[header]).toLocaleString("en-US") ==
+                                "0" &&
+                                item.name == "Average Deal Size") ||
+                              (Number(item[header]).toLocaleString("en-US") ==
+                                "0" &&
+                                item.name == "Actual Hours") ||
+                              (Number(item[header]).toLocaleString("en-US") ==
+                                "0" &&
+                                item.name == "Estimated Hours") ||
+                              (Number(item[header]).toLocaleString("en-US") ==
+                                "0" &&
+                                item.name == "Average Elapsed Time")
+                            ? "-"
+                            : Number(item[header]).toLocaleString("en-US")
+                          : item[header]?.includes("^&2^&1")
+                          ? item[header]?.split("^&")[0]
+                          : item[header] == "0"
+                          ? ""
+                          : item[header]}
+                        {colIndex === 0 &&
+                          (item.name?.includes("Average Deal Size") ? (
+                            <span className="alignRight">($)</span>
+                          ) : item.name?.includes("Opportunity Amount") ? (
+                            <span className="alignRight">($)</span>
+                          ) : item.name?.includes("Actual Hours") ? (
+                            <span className="alignRight">(hrs.)</span>
+                          ) : item.name?.includes("Estimated Hours") ? (
+                            <span className="alignRight">(hrs.)</span>
+                          ) : item.name?.includes("Average Elapsed Time") ? (
+                            <span className="alignRight">(days)</span>
+                          ) : (
+                            ""
+                          ))}
+                      </td>
+                    ))}
+                  </tr>
+                )}
+
+                {isRowExpanded(rowIndex) &&
+                  data.dhOppt
+                    .slice(2)
+                    .filter(
+                      (lvl2Item) =>
+                        lvl2Item.lvl === 2 &&
+                        lvl2Item.owner_name_copy === item.owner_name_copy
+                    )
+                    .map((lvl2Item, lvl2Index) => (
+                      <tr key={`lvl2_${lvl2Index}`}>
+                        {headers.map((header, colIndex) => (
+                          <td
+                            className={
+                              header.toLowerCase()?.includes("total")
+                                ? "innertotalStyle"
+                                : header.toLowerCase()?.includes("_01_01") ||
+                                  header.toLowerCase()?.includes("_07_01")
+                                ? "innerevenColor"
+                                : header.toLowerCase()?.includes("_10_01") ||
+                                  header.toLowerCase()?.includes("_04_01")
+                                ? "inneroddColor"
+                                : header === "name"
+                                ? "nameStyle"
+                                : item[header]
+                            }
+                            key={colIndex}
+                            title={
+                              !isNaN(lvl2Item[header])
+                                ? lvl2Item[header]?.includes("^&2^&1")
+                                  ? Number(
+                                      lvl2Item[header]?.split("^&")[0]
+                                    ).toLocaleString("en-US")
+                                  : (Number(lvl2Item[header]).toLocaleString(
+                                      "en-US"
+                                    ) == "0" &&
+                                      lvl2Item.name == "Average Deal Size") ||
+                                    (Number(lvl2Item[header]).toLocaleString(
+                                      "en-US"
+                                    ) == "0" &&
+                                      lvl2Item.name == "Actual Hours") ||
+                                    (Number(lvl2Item[header]).toLocaleString(
+                                      "en-US"
+                                    ) == "0" &&
+                                      lvl2Item.name == "Estimated Hours") ||
+                                    (Number(lvl2Item[header]).toLocaleString(
+                                      "en-US"
+                                    ) == "0" &&
+                                      lvl2Item.name == "Average Elapsed Time")
+                                  ? "-"
+                                  : Number(lvl2Item[header]).toLocaleString(
+                                      "en-US"
+                                    )
+                                : lvl2Item[header]?.includes("^&2^&1")
+                                ? lvl2Item[header]?.split("^&")[0]
+                                : lvl2Item[header]
+                            }
+                          >
+                            {!isNaN(lvl2Item[header])
+                              ? lvl2Item[header]?.includes("^&2^&1")
+                                ? Number(
+                                    lvl2Item[header]?.split("^&")[0]
+                                  ).toLocaleString("en-US")
+                                : (Number(lvl2Item[header]).toLocaleString(
+                                    "en-US"
+                                  ) == "0" &&
+                                    lvl2Item.name == "Average Deal Size") ||
+                                  (Number(lvl2Item[header]).toLocaleString(
+                                    "en-US"
+                                  ) == "0" &&
+                                    lvl2Item.name == "Actual Hours") ||
+                                  (Number(lvl2Item[header]).toLocaleString(
+                                    "en-US"
+                                  ) == "0" &&
+                                    lvl2Item.name == "Estimated Hours") ||
+                                  (Number(lvl2Item[header]).toLocaleString(
+                                    "en-US"
+                                  ) == "0" &&
+                                    lvl2Item.name == "Average Elapsed Time")
+                                ? "-"
+                                : Number(lvl2Item[header]).toLocaleString(
+                                    "en-US"
+                                  )
+                              : lvl2Item[header]?.includes("^&2^&1")
+                              ? lvl2Item[header]?.split("^&")[0]
+                              : lvl2Item[header]}
+                            {colIndex === 0 &&
+                              (lvl2Item.name?.includes("Average Deal Size") ? (
+                                <span className="alignRight">($)</span>
+                              ) : lvl2Item.name?.includes(
+                                  "Opportunity Amount"
+                                ) ? (
+                                <span className="alignRight">($)</span>
+                              ) : lvl2Item.name?.includes("Actual Hours") ? (
+                                <span className="alignRight">(hrs.)</span>
+                              ) : lvl2Item.name?.includes("Estimated Hours") ? (
+                                <span className="alignRight">(hrs.)</span>
+                              ) : lvl2Item.name?.includes(
+                                  "Average Elapsed Time"
+                                ) ? (
+                                <span className="alignRight">(days)</span>
+                              ) : (
+                                ""
+                              ))}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+              </React.Fragment>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div
+        className="col-md-12"
+        style={{
+          display: "flex",
+          justifyContent: "right",
+          margin: "5px",
+          gap: "5px",
+        }}
+      >
+        <div
+          className="col-md-9"
+          style={{ width: "45px", display: "contents" }}
+        >
+          <b style={{ padding: "3px" }}>Show</b>
+          <select
+            className="entriesStyle"
+            value={itemsPerPage}
+            onChange={handleItemsPerPageChange}
+          >
+            <option value={10}>10</option>
+            <option value={25}>25</option>
+            <option value={50}>50</option>
+          </select>
+          <b style={{ padding: "3px" }}>Entries</b>
+        </div>
+        <div
+          className="col-md-2"
+          style={{
+            display: "flex",
+            justifyContent: "end",
+            marginTop: "5px",
+            gap: "3px",
+            paddingRight: "50px",
+          }}
+        >
+          {currentPage === 1 ? (
+            <FaAngleDoubleLeft
+              style={{ color: "#ccc", width: "1em", height: "1.5em" }}
+            />
+          ) : (
+            <FaAngleDoubleLeft
+              style={{ width: "1em", height: "1.5em" }}
+              onClick={handleFirstPage}
+            />
+          )}
+          {currentPage === 1 ? (
+            <FaAngleLeft size="1.5em" style={{ color: "#ccc" }} />
+          ) : (
+            <FaAngleLeft
+              size="1.5em"
+              onClick={() => onPageChange(currentPage - 1)}
+            />
+          )}
+          <span>
+            Page {currentPage} of {totalPages}
+          </span>
+          {currentPage === totalPages || totalPages == 0 ? (
+            <FaAngleRight size="1.5em" style={{ color: "#ccc" }} />
+          ) : (
+            <FaAngleRight
+              size="1.5em"
+              onClick={() => onPageChange(currentPage + 1)}
+            />
+          )}
+          {currentPage === totalPages || totalPages == 0 ? (
+            <FaAngleDoubleRight
+              style={{ color: "#ccc", width: "1em", height: "1.5em" }}
+            />
+          ) : (
+            <FaAngleDoubleRight
+              style={{ width: "1em", height: "1.5em" }}
+              onClick={handleLastPage}
+            />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default DhAnalyticsTable;
